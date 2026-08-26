@@ -36,7 +36,7 @@
 <body>
 <header>
   <h1>Sales Intel</h1>
-  <p>Cole os links do cliente e receba um briefing pronto para a reuniÃ£o.</p>
+  <p>Cole os links do cliente e receba um briefing pronto para a reunião.</p>
 </header>
 
 <main>
@@ -93,13 +93,13 @@ function render(r) {
     <div class="meta">
       <span class="tag">${r.origem === 'cache' ? 'do cache' : 'coletado agora'}</span>
       <span class="tag">extrator: ${escapar(r.extrator)}</span>
-      <span class="tag">confianÃ§a: ${escapar(b.confianca)}</span>
+      <span class="tag">confiança: ${escapar(b.confianca)}</span>
       ${escapar(r.url)}
     </div>
     <p>${escapar(b.resumo) || '<span class="vazio">sem resumo</span>'}</p>
     ${lista('Produtos', b.produtos)}
     ${lista('Sinais recentes', b.sinais_recentes)}
-    ${lista('Dores provÃ¡veis', b.dores_provaveis)}
+    ${lista('Dores prováveis', b.dores_provaveis)}
     ${lista('Ganchos de conversa', b.ganchos_de_conversa)}
     ${lista('Contatos', b.contatos)}
   </div>`;
