@@ -99,7 +99,9 @@ def gerar_briefings(req: BriefingRequest) -> list[BriefingResponse]:
         url = str(url_obj)
 
         if not req.forcar_atualizacao:
-            cache = db.buscar(url)
+            # Mesma fonte consultada por escolher_extrator() e por /health, para
+            # que os tres nunca discordem sobre o modo de operacao (D-09).
+            cache = db.buscar(url, llm_disponivel=bool(config.llm_api_key()))
             if cache is not None:
                 dados, nome_extrator, coletado_em = cache
                 resultados.append(
