@@ -1,4 +1,4 @@
-﻿"""
+"""
 API do Sales Intel.
 
 Fluxo de uma requisicao:
@@ -14,7 +14,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import db
-from .extractor import escolher_extrator
+from .extractor import HeuristicExtractor, escolher_extrator
 from .fetcher import FetchError, buscar_html, extrair_texto
 from .schemas import Briefing, BriefingRequest, BriefingResponse
 
@@ -35,6 +35,33 @@ def health() -> dict:
     return {"status": "ok"}
 
 
+def _extrair_com_fallback(url: str, titulo: str, texto: str) -> tuple[Briefing, str]:
+    """
+    Escolhe o extrator ativo para esta URL e degrada em tres degraus se
+    ele falhar. Nenhuma rota desta funcao levanta excecao: falha de
+    extrator vira resultado, nunca erro HTTP (SPEC SS6/SS10), porque o
+    vendedor prefere briefing parcial a uma tela quebrada.
+    """
+    extrator = escolher_extrator()
+    try:
+        briefing = extrator.extrair(url, titulo, texto)
+        return briefing, extrator.nome
+    except Exception as erro_extrator:
+        # Except amplo e proposital: qualquer falha do extrator principal
+        # precisa degradar para o heuristico, e o tipo de erro do LLM
+        # ainda nao existe nesta fase do plano.
+        try:
+            briefing = HeuristicExtractor().extrair(url, titulo, texto)
+            return briefing, "heuristico"
+        except Exception as erro_heuristico:
+            briefing = Briefing(
+                empresa=url,
+                resumo=f"Nao foi possivel gerar o briefing. {erro_heuristico}",
+                confianca="baixa",
+            )
+            return briefing, "falha"
+
+
 @app.post("/api/briefings", response_model=list[BriefingResponse])
 def gerar_briefings(req: BriefingRequest) -> list[BriefingResponse]:
     """
@@ -44,7 +71,6 @@ def gerar_briefings(req: BriefingRequest) -> list[BriefingResponse]:
     independente e o erro vira um briefing de confianca baixa explicando
     o que aconteceu. O vendedor prefere resultado parcial a erro 500.
     """
-    extrator = escolher_extrator()
     resultados: list[BriefingResponse] = []
 
     for url_obj in req.urls:
@@ -68,10 +94,12 @@ def gerar_briefings(req: BriefingRequest) -> list[BriefingResponse]:
         try:
             html = buscar_html(url)
             titulo, texto = extrair_texto(html)
-            briefing = extrator.extrair(url, titulo, texto)
-            coletado_em = db.salvar(url, briefing.model_dump(), extrator.nome)
+            briefing, nome_extrator = _extrair_com_fallback(url, titulo, texto)
+            if nome_extrator == "falha":
+                coletado_em = datetime.now(timezone.utc)
+            else:
+                coletado_em = db.salvar(url, briefing.model_dump(), nome_extrator)
             origem = "novo"
-            nome_extrator = extrator.nome
         except FetchError as e:
             briefing = Briefing(
                 empresa=url,
