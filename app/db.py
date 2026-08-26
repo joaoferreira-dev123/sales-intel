@@ -38,8 +38,12 @@ def criar_tabelas() -> None:
         )
 
 
-def buscar(url: str) -> tuple[dict, str, datetime] | None:
-    """Devolve (briefing, extrator, data) se houver cache valido."""
+def buscar(url: str, llm_disponivel: bool = False) -> tuple[dict, str, datetime] | None:
+    """
+    Devolve (briefing, extrator, data) se houver cache valido. Quando o LLM
+    esta disponivel, uma entrada gravada pelo heuristico e tratada como
+    ausente (D-09).
+    """
     with conectar() as conn:
         row = conn.execute(
             "SELECT briefing, extrator, coletado_em FROM briefings WHERE url = ?",
@@ -52,6 +56,9 @@ def buscar(url: str) -> tuple[dict, str, datetime] | None:
     coletado_em = datetime.fromisoformat(row["coletado_em"])
     if datetime.now(timezone.utc) - coletado_em > VALIDADE:
         return None  # existe, mas venceu
+
+    if llm_disponivel and row["extrator"] == "heuristico":
+        return None  # heuristico com LLM ligado: forca recoleta para subir a qualidade
 
     return json.loads(row["briefing"]), row["extrator"], coletado_em
 
