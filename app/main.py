@@ -15,7 +15,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import db
-from .extractor import HeuristicExtractor, escolher_extrator
+from .extractor import HeuristicExtractor, LLMError, escolher_extrator
 from .fetcher import FetchError, buscar_html, extrair_texto
 from .schemas import Briefing, BriefingRequest, BriefingResponse
 
@@ -41,31 +41,45 @@ def health() -> dict:
     return {"status": "ok"}
 
 
-def _extrair_com_fallback(url: str, titulo: str, texto: str) -> tuple[Briefing, str]:
+def _extrair_com_fallback(
+    url: str, titulo: str, texto: str
+) -> tuple[Briefing, str, str | None]:
     """
     Escolhe o extrator ativo para esta URL e degrada em tres degraus se
     ele falhar. Nenhuma rota desta funcao levanta excecao: falha de
     extrator vira resultado, nunca erro HTTP (SPEC SS6/SS10), porque o
     vendedor prefere briefing parcial a uma tela quebrada.
+
+    O terceiro elemento devolvido e o motivo da degradacao (D-05), separado
+    de `extrator` para nao poluir a enumeracao da SPEC SS8.
     """
     extrator = escolher_extrator()
     try:
         briefing = extrator.extrair(url, titulo, texto)
-        return briefing, extrator.nome
+        return briefing, extrator.nome, None
     except Exception as erro_extrator:
         # Except amplo e proposital: qualquer falha do extrator principal
         # precisa degradar para o heuristico, e o tipo de erro do LLM
         # ainda nao existe nesta fase do plano.
         try:
             briefing = HeuristicExtractor().extrair(url, titulo, texto)
-            return briefing, "heuristico"
+            # D-06: so interpola str(erro_extrator) quando a excecao e
+            # LLMError, porque essas mensagens sao escritas e auditadas por
+            # nos (plano 05). Qualquer outra excecao pode carregar texto
+            # arbitrario de terceiro, entao o vendedor le apenas a frase
+            # generica nesse caso.
+            degradado = "IA indisponivel, briefing gerado por regras."
+            if isinstance(erro_extrator, LLMError):
+                degradado = f"{degradado} {erro_extrator}"
+            degradado = degradado[:200]
+            return briefing, "heuristico", degradado
         except Exception as erro_heuristico:
             briefing = Briefing(
                 empresa=url,
                 resumo=f"Nao foi possivel gerar o briefing. {erro_heuristico}",
                 confianca="baixa",
             )
-            return briefing, "falha"
+            return briefing, "falha", None
 
 
 @app.post("/api/briefings", response_model=list[BriefingResponse])
@@ -100,7 +114,7 @@ def gerar_briefings(req: BriefingRequest) -> list[BriefingResponse]:
         try:
             html = buscar_html(url)
             titulo, texto = extrair_texto(html)
-            briefing, nome_extrator = _extrair_com_fallback(url, titulo, texto)
+            briefing, nome_extrator, degradado = _extrair_com_fallback(url, titulo, texto)
             if nome_extrator == "falha":
                 coletado_em = datetime.now(timezone.utc)
             else:
@@ -115,6 +129,7 @@ def gerar_briefings(req: BriefingRequest) -> list[BriefingResponse]:
             coletado_em = datetime.now(timezone.utc)
             origem = "novo"
             nome_extrator = "falha"
+            degradado = None
 
         resultados.append(
             BriefingResponse(
@@ -122,6 +137,7 @@ def gerar_briefings(req: BriefingRequest) -> list[BriefingResponse]:
                 briefing=briefing,
                 origem=origem,
                 extrator=nome_extrator,
+                degradado=degradado,
                 coletado_em=coletado_em,
             )
         )

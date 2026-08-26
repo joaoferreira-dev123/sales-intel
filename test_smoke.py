@@ -72,6 +72,10 @@ def test_extrator_que_falha_nao_derruba_a_requisicao(monkeypatch):
     assert item["extrator"] == "heuristico"
     assert item["briefing"]["confianca"] == "baixa"
     assert item["origem"] == "novo"
+    # D-05/D-06: a degradacao viaja num campo proprio, com mensagem curta,
+    # sem vazar o texto da excecao original (que nao e LLMError aqui).
+    assert item["degradado"].startswith("IA indisponivel")
+    assert "provedor fora do ar" not in item["degradado"]
 
 def test_llm_sem_chave_levanta_erro_claro(monkeypatch):
     # SPEC S14: sem chave, o erro precisa ser claro para o vendedor, nao um
