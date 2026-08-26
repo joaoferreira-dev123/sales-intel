@@ -1,0 +1,115 @@
+﻿<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sales Intel</title>
+<style>
+  :root { --ink:#1a2333; --muted:#5f6b7c; --accent:#e4572e; --line:#e3e8ef; }
+  * { box-sizing: border-box; }
+  body { font-family: system-ui, -apple-system, Segoe UI, sans-serif;
+         margin:0; background:#fff; color:var(--ink); }
+  header { padding:28px 24px 20px; border-bottom:1px solid var(--line); }
+  h1 { margin:0; font-size:22px; }
+  header p { margin:6px 0 0; color:var(--muted); font-size:14px; }
+  main { max-width:820px; margin:0 auto; padding:24px; }
+  textarea { width:100%; min-height:110px; padding:12px; font:inherit;
+             border:1px solid var(--line); border-radius:8px; resize:vertical; }
+  .row { display:flex; gap:12px; align-items:center; margin-top:12px; }
+  button { background:var(--accent); color:#fff; border:0; padding:11px 20px;
+           border-radius:8px; font:inherit; font-weight:600; cursor:pointer; }
+  button:disabled { opacity:.5; cursor:default; }
+  label { font-size:14px; color:var(--muted); }
+  .card { border:1px solid var(--line); border-radius:10px; padding:18px;
+          margin-top:16px; }
+  .card h2 { margin:0 0 4px; font-size:18px; }
+  .meta { font-size:12px; color:var(--muted); margin-bottom:10px; }
+  .tag { display:inline-block; background:#f4f6f9; border-radius:20px;
+         padding:2px 10px; font-size:12px; margin-right:6px; }
+  .bloco { margin-top:12px; }
+  .bloco strong { display:block; font-size:13px; color:var(--muted);
+                  text-transform:uppercase; letter-spacing:.5px; margin-bottom:4px; }
+  ul { margin:4px 0; padding-left:18px; }
+  .vazio { color:var(--muted); font-style:italic; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Sales Intel</h1>
+  <p>Cole os links do cliente e receba um briefing pronto para a reuniÃ£o.</p>
+</header>
+
+<main>
+  <textarea id="urls" placeholder="Um link por linha&#10;https://exemplo.com.br&#10;https://exemplo.com.br/sobre"></textarea>
+  <div class="row">
+    <button id="btn">Gerar briefing</button>
+    <label><input type="checkbox" id="forcar"> Ignorar cache</label>
+    <span id="status" class="meta"></span>
+  </div>
+  <div id="resultados"></div>
+</main>
+
+<script>
+const btn = document.getElementById('btn');
+const status = document.getElementById('status');
+const saida = document.getElementById('resultados');
+
+btn.onclick = async () => {
+  const urls = document.getElementById('urls').value
+    .split('\n').map(s => s.trim()).filter(Boolean);
+  if (!urls.length) { status.textContent = 'Cole pelo menos um link.'; return; }
+
+  btn.disabled = true;
+  status.textContent = 'Coletando...';
+  saida.innerHTML = '';
+
+  try {
+    const resp = await fetch('/api/briefings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ urls, forcar_atualizacao: document.getElementById('forcar').checked })
+    });
+    if (!resp.ok) throw new Error('Erro ' + resp.status);
+    const dados = await resp.json();
+    status.textContent = dados.length + ' resultado(s)';
+    saida.innerHTML = dados.map(render).join('');
+  } catch (e) {
+    status.textContent = 'Falhou: ' + e.message;
+  } finally {
+    btn.disabled = false;
+  }
+};
+
+function lista(titulo, itens) {
+  if (!itens || !itens.length) return '';
+  return `<div class="bloco"><strong>${titulo}</strong>
+    <ul>${itens.map(i => `<li>${escapar(i)}</li>`).join('')}</ul></div>`;
+}
+
+function render(r) {
+  const b = r.briefing;
+  return `<div class="card">
+    <h2>${escapar(b.empresa)}</h2>
+    <div class="meta">
+      <span class="tag">${r.origem === 'cache' ? 'do cache' : 'coletado agora'}</span>
+      <span class="tag">extrator: ${escapar(r.extrator)}</span>
+      <span class="tag">confianÃ§a: ${escapar(b.confianca)}</span>
+      ${escapar(r.url)}
+    </div>
+    <p>${escapar(b.resumo) || '<span class="vazio">sem resumo</span>'}</p>
+    ${lista('Produtos', b.produtos)}
+    ${lista('Sinais recentes', b.sinais_recentes)}
+    ${lista('Dores provÃ¡veis', b.dores_provaveis)}
+    ${lista('Ganchos de conversa', b.ganchos_de_conversa)}
+    ${lista('Contatos', b.contatos)}
+  </div>`;
+}
+
+function escapar(s) {
+  return String(s ?? '').replace(/[&<>"]/g, c =>
+    ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;' }[c]));
+}
+</script>
+</body>
+</html>
+
