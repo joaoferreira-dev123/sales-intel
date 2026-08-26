@@ -26,6 +26,7 @@
   .meta { font-size:12px; color:var(--muted); margin-bottom:10px; }
   .tag { display:inline-block; background:#f4f6f9; border-radius:20px;
          padding:2px 10px; font-size:12px; margin-right:6px; }
+  .tag-aviso { background:#fde8e0; color:var(--accent); font-weight:600; }
   .bloco { margin-top:12px; }
   .bloco strong { display:block; font-size:13px; color:var(--muted);
                   text-transform:uppercase; letter-spacing:.5px; margin-bottom:4px; }
@@ -94,6 +95,7 @@ function render(r) {
       <span class="tag">${r.origem === 'cache' ? 'do cache' : 'coletado agora'}</span>
       <span class="tag">extrator: ${escapar(r.extrator)}</span>
       <span class="tag">confiança: ${escapar(b.confianca)}</span>
+      ${r.degradado ? `<span class="tag tag-aviso">${escapar(r.degradado)}</span>` : ''}
       ${escapar(r.url)}
     </div>
     <p>${escapar(b.resumo) || '<span class="vazio">sem resumo</span>'}</p>
