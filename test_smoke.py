@@ -1,5 +1,5 @@
 ﻿"""Testes que rodam sem internet."""
-from app.extractor import HeuristicExtractor
+from app.extractor import HeuristicExtractor, LLMExtractor, escolher_extrator
 from app.fetcher import extrair_texto
 
 HTML = """
@@ -29,4 +29,13 @@ def test_heuristico_encontra_contatos():
     titulo, texto = extrair_texto(HTML)
     b = HeuristicExtractor().extrair("https://acme.com.br", titulo, texto)
     assert "contato@acme.com.br" in b.contatos
+
+def test_escolher_extrator_sem_chave_devolve_heuristico(monkeypatch):
+    # Trava L-05: sem chave de API no ambiente, o sistema roda no heuristico.
+    monkeypatch.delenv("LLM_API_KEY", raising=False)
+    assert isinstance(escolher_extrator(), HeuristicExtractor)
+
+def test_escolher_extrator_com_chave_devolve_llm(monkeypatch):
+    monkeypatch.setenv("LLM_API_KEY", "chave-de-teste-sem-valor")
+    assert isinstance(escolher_extrator(), LLMExtractor)
 
