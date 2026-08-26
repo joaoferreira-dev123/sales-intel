@@ -14,7 +14,7 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import db
+from . import config, db
 from .extractor import HeuristicExtractor, LLMError, escolher_extrator
 from .fetcher import FetchError, buscar_html, extrair_texto
 from .schemas import Briefing, BriefingRequest, BriefingResponse
@@ -38,7 +38,9 @@ def inicializar() -> None:
 
 @app.get("/health")
 def health() -> dict:
-    return {"status": "ok"}
+    # D-08: extensao aditiva ao contrato da SPEC SS10 — "status" continua
+    # "ok", e o campo novo so informa o modo de operacao, sem expor a chave.
+    return {"status": "ok", "llm_disponivel": bool(config.llm_api_key())}
 
 
 def _extrair_com_fallback(
