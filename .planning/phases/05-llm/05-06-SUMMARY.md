@@ -165,3 +165,14 @@ None.
 ---
 *Phase: 05-llm*
 *Completed: 2026-08-26*
+
+## Self-Check: PASSED
+- FOUND: app/schemas.py
+- FOUND: app/main.py
+- FOUND: static/index.html
+- FOUND: test_smoke.py
+- FOUND: .planning/phases/05-llm/05-06-SUMMARY.md
+- FOUND commit: dd8d3e9 (Task 1)
+- FOUND commit: eca6448 (Task 2)
+- FOUND commit: 7807945 (Task 3)
+- FOUND commit: ae6b71e (SUMMARY docs commit)
