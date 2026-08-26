@@ -18,6 +18,9 @@ USER_AGENT = "bna-sales-intel/0.1 (+contato: gabriel@bna.dev.br)"
 
 TIMEOUT = 15.0
 MAX_BYTES = 3_000_000  # 3 MB: pagina maior que isso quase sempre e lixo
+# Robots.txt e um arquivo minusculo e bloqueia o trabalho de verdade; esperar
+# 15s (TIMEOUT) por ele significaria ate 30s por URL no pior caso.
+ROBOTS_TIMEOUT = 5.0
 
 
 class FetchError(Exception):
@@ -31,7 +34,15 @@ def pode_raspar(url: str) -> bool:
     parser = urllib.robotparser.RobotFileParser()
     parser.set_url(robots_url)
     try:
-        parser.read()
+        resp = httpx.get(
+            robots_url,
+            timeout=ROBOTS_TIMEOUT,
+            follow_redirects=True,
+            headers={"User-Agent": USER_AGENT},
+        )
+        if resp.status_code >= 400:
+            return True  # sem robots.txt legivel, assume que pode
+        parser.parse(resp.text.splitlines())
     except Exception:
         return True
     return parser.can_fetch(USER_AGENT, url)
