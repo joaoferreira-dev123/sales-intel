@@ -1,6 +1,7 @@
 ﻿"""Testes que rodam sem internet."""
 from datetime import datetime, timezone
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app import db, main
@@ -71,4 +72,14 @@ def test_extrator_que_falha_nao_derruba_a_requisicao(monkeypatch):
     assert item["extrator"] == "heuristico"
     assert item["briefing"]["confianca"] == "baixa"
     assert item["origem"] == "novo"
+
+def test_llm_sem_chave_levanta_erro_claro(monkeypatch):
+    # SPEC S14: sem chave, o erro precisa ser claro para o vendedor, nao um
+    # traceback. D-12 teste 4.
+    monkeypatch.delenv("LLM_API_KEY", raising=False)
+    with pytest.raises(RuntimeError) as exc:
+        LLMExtractor().extrair("https://acme.com.br", "Acme Tecnologia", "texto qualquer")
+
+    assert "chave" in str(exc.value).lower()
+    assert "None" not in str(exc.value) and "NoneType" not in str(exc.value)
 
