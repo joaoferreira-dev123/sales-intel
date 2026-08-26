@@ -18,10 +18,10 @@ Isso resolve tres problemas de uma vez:
   3. da para comparar as duas saidas e medir se o LLM realmente melhora.
 """
 
-import os
 import re
 from typing import Protocol
 
+from . import config
 from .schemas import Briefing
 
 EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+\.[\w.]+")
@@ -73,9 +73,9 @@ class LLMExtractor:
 
     nome = "llm"
 
-    def __init__(self, api_key: str | None = None, modelo: str = "gpt-4o-mini"):
-        self.api_key = api_key or os.getenv("LLM_API_KEY")
-        self.modelo = modelo
+    def __init__(self, api_key: str | None = None, modelo: str | None = None):
+        self.api_key = api_key or config.llm_api_key()
+        self.modelo = modelo or config.LLM_MODELO
 
     def disponivel(self) -> bool:
         return bool(self.api_key)
@@ -85,7 +85,7 @@ class LLMExtractor:
             raise RuntimeError("Sem chave de API configurada.")
         # Corte de custo: texto longo demais nao melhora o resultado e
         # multiplica o preco por chamada.
-        _trecho = texto[:12000]
+        _trecho = texto[: config.LLM_MAX_CHARS]
         raise NotImplementedError("Chamada ao LLM entra quando a chave chegar.")
 
 
