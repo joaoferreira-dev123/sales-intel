@@ -170,19 +170,47 @@ decisões em si moram aqui, nesta seção, porque é ela que o gate de cobertura
 > antes. Custou uma contagem de 12 para 2 nesta fase, com o gate ainda reportando
 > `passed: true`.
 
-- **D-13:** **`LLM_BASE_URL` entra no `config.py` como quarta variável**, com padrão
-  `https://api.openai.com/v1`. O provedor é o **Groq**, compatível com a API da OpenAI,
-  então o endpoint não pode ser constante de módulo em `app/extractor.py` — vira
-  `config.LLM_BASE_URL`. Emenda D-04, que travava três variáveis. **Estende a SPEC §13**,
-  que lista oito variáveis e não inclui `LLM_BASE_URL`; extensão aditiva, registrada na
-  tabela de divergências.
+- **D-13:** **`LLM_BASE_URL` entra no `config.py` como quarta variável.** O provedor é o
+  **Groq**, compatível com a API da OpenAI, então o endpoint não pode ser constante de
+  módulo em `app/extractor.py` — vira `config.LLM_BASE_URL`. Emenda D-04, que travava três
+  variáveis. **Estende a SPEC §13**, que lista oito variáveis e não inclui `LLM_BASE_URL`;
+  extensão aditiva, registrada na tabela de divergências.
   — **Reversibility:** reversible — leitura de ambiente com padrão; remover depois toca
   um arquivo.
-  — **Armadilha operacional:** padrão aponta para a OpenAI enquanto a chave real é do
-  Groq. Exportar só `LLM_API_KEY` manda chave do Groq para a OpenAI e toma 401 — que
-  degrada para o heurístico em vez de quebrar, mas degrada *silenciosamente* para quem
-  não ler o aviso. O `.env.example` carrega a combinação verificada para que o caminho
-  de cópia seja o caminho feliz.
+
+  **Invertido pelo usuário em 2026-08-26**, ainda antes da execução. Os padrões eram
+  neutros quanto a provedor — `LLM_BASE_URL=https://api.openai.com/v1` e
+  `LLM_MODELO=gpt-4o-mini`, este último ancorado na SPEC §13. **Passam a apontar para o
+  provedor real:**
+
+  | | Antes | Agora |
+  |---|---|---|
+  | `LLM_BASE_URL` | `https://api.openai.com/v1` | **`https://api.groq.com/openai/v1`** |
+  | `LLM_MODELO` | `gpt-4o-mini` (SPEC §13) | **`openai/gpt-oss-120b`** |
+
+  **Razão da inversão, nas palavras do usuário:** *o argumento da armadilha do 401
+  silencioso pesa mais que a neutralidade de provedor; o provedor real é o Groq, e
+  degradação silenciosa numa demo é o pior modo de falha possível.*
+
+  O desenho anterior tinha uma armadilha real: padrão apontando para a OpenAI com chave do
+  Groq no ambiente. Exportar só `LLM_API_KEY` mandava chave do Groq para a OpenAI, tomava
+  401 e degradava para o heurístico — sem quebrar, mas **em silêncio** para quem não lesse
+  o aviso. Num projetor, isso lê como "o produto é ruim", não como "faltou uma variável".
+
+  **As duas variáveis viram juntas, e é isso que fecha a armadilha.** Inverter só o
+  endpoint moveria a falha de porta em vez de fechá-la: `gpt-4o-mini` não existe no Groq,
+  então endpoint certo com modelo errado dá 400/404 e degrada exatamente igual. Padrão
+  coerente significa que **só `LLM_API_KEY` exportada já funciona de ponta a ponta**.
+
+  **Custo aceito:** o padrão de `LLM_MODELO` passa a divergir da SPEC §13, que crava
+  `gpt-4o-mini`. Divergência registrada na tabela, mesma natureza aditiva de
+  `LLM_BASE_URL`. Quem quiser OpenAI define as duas variáveis — o caminho continua aberto,
+  só deixou de ser o padrão.
+
+  **Armadilha residual, muito menor:** quem tiver chave da OpenAI e esquecer as duas
+  variáveis manda chave da OpenAI para o Groq e toma 401, com a mesma degradação
+  silenciosa. É o caso improvável — não existe chave da OpenAI neste projeto — e o
+  `.env.example` continua carregando a combinação verificada.
 
 - **D-14:** **As ondas 4–6 passam a ser verificáveis contra modelo real.** A verdade
   *"com chave, o briefing vem rico"* deixa de ser `verification: backstop` e vira verdade
@@ -332,6 +360,7 @@ Levantadas na leitura de 2026-08-26. As três primeiras viraram decisão; as dem
 | §12 `app/config.py` | ausente; `os.getenv` inline em `extractor.py:77` | **Parcial** — D-04 |
 | §13 oito variáveis de ambiente | código lê 1, crava o resto | **Parcial** — D-04 (entram 3 das 8) |
 | §13 não prevê `LLM_BASE_URL` | provedor real exige endpoint configurável | **Estende (aditivo)** — D-13; 4ª variável, fora das 8 da §13 |
+| §13 crava `LLM_MODELO=gpt-4o-mini` | provedor real é o Groq; `gpt-4o-mini` não existe lá | **Diverge (padrão)** — D-13 invertida; padrão vira `openai/gpt-oss-120b` para o par de padrões ficar coerente |
 | §12 `tests/` com 4 arquivos | `test_smoke.py` na raiz, 3 testes | **Adiada** — D-12 |
 | §17 `.env.example` obrigatório | ausente | **Fecha** — D-04 |
 | §10 `/health` = `{"status":"ok"}` | conforme | **Estende (aditivo)** — D-08 |
@@ -382,9 +411,10 @@ LLM_MAX_CHARS=12000
 ```
 
 **As decisões formais estão na seção de decisões**, na subseção *"Chegada da chave de
-API"* — **D-13** (`LLM_BASE_URL` como quarta variável, padrão OpenAI, armadilha
-operacional) e **D-14** (ondas 4–6 verificáveis, backstop vira verdade explícita, limite
-da verificação quanto ao galho de degradação de D-02).
+API"* — **D-13** (`LLM_BASE_URL` como quarta variável; padrões invertidos pelo usuário
+para apontar ao Groq, fechando a armadilha do 401 silencioso) e **D-14** (ondas 4–6
+verificáveis, backstop vira verdade explícita, limite da verificação quanto ao galho de
+degradação de D-02).
 
 Ficam ali, e não aqui, por um motivo concreto: o gate `check.decision-coverage-plan` varre
 apenas aquele bloco. Com D-13 e D-14 só nesta seção, o gate reportava `total: 12` e

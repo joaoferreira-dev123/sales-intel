@@ -8,11 +8,12 @@
 `httpx` em vez de SDK — se pagou aqui: o provedor mudou entre o planejamento e a execucao e
 nenhuma linha de codigo de chamada precisou mudar.
 
-**Modelo:** `openai/gpt-oss-120b`, escolhido por ser o **unico modelo grande da conta com
-suporte a `structured_outputs`** — os demais so oferecem `json_mode`. Essa e exatamente a
-capacidade que o caminho primario de D-02 exige, entao a escolha de modelo trava junto com a
-decisao: trocar `LLM_MODELO` por outro modelo da conta cai no galho de degradacao de D-02, e nao
-no caminho principal (D-14).
+**Modelo:** `openai/gpt-oss-120b`, fixado como **padrao no codigo por D-13 invertida** e escolhido
+por ser o **unico modelo grande da conta com suporte a `structured_outputs`** — os demais so
+oferecem `json_mode` (motivo tecnico registrado em D-14). Essa e exatamente a capacidade que o
+caminho primario de D-02 exige, entao a escolha de modelo trava junto com a decisao: trocar
+`LLM_MODELO` por outro modelo da conta cai no galho de degradacao de D-02, e nao no caminho
+principal.
 
 > **Nota:** o detector deterministico de api-coverage devolveu `detected: false` para esta fase.
 > E falso negativo: o vocabulario de gatilho do detector e em ingles e o escopo desta fase esta
@@ -24,8 +25,8 @@ no caminho principal (D-14).
 | Capacidade | Uso nesta fase | Onde |
 |---|---|---|
 | `POST /chat/completions` | **USADA** — uma chamada por URL, sincrona | `LLMExtractor._chamar_provedor` |
-| Endereco base do endpoint | **USADA** — vem de `config.LLM_BASE_URL`, padrao `https://api.openai.com/v1`, valor em uso `https://api.groq.com/openai/v1` (D-13) | `app/config.py` |
-| `model` | **USADA** — vem de `config.LLM_MODELO`; padrao no codigo `gpt-4o-mini` (SPEC §13), valor em uso `openai/gpt-oss-120b` (D-14) | `app/config.py` |
+| Endereco base do endpoint | **USADA** — vem de `config.LLM_BASE_URL`; padrao e valor em uso sao o mesmo `https://api.groq.com/openai/v1` (D-13 invertida) | `app/config.py` |
+| `model` | **USADA** — vem de `config.LLM_MODELO`; padrao e valor em uso sao o mesmo `openai/gpt-oss-120b`, divergindo da SPEC §13 de proposito (D-13 invertida; motivo tecnico da escolha em D-14) | `app/config.py` |
 | `messages` (papeis `system` + `user`) | **USADA** — instrucao e dado em mensagens separadas (D-11) | `LLMExtractor._montar_mensagens` |
 | `response_format: json_schema` (`structured_outputs`) | **USADA — caminho primario, verificado contra modelo real** — schema derivado de `Briefing.model_json_schema()` (D-02); e a capacidade pela qual `gpt-oss-120b` foi escolhido (D-14) | `LLMExtractor._chamar_provedor` |
 | `response_format` ausente (JSON pedido no prompt) | **USADA — galho de degradacao, coberto so por duplo** — D-02, disparado por HTTP 400 citando `response_format`. `gpt-oss-120b` nao produz esse 400, entao a verificacao com modelo real **nao** exercita este caminho (D-14) | `LLMExtractor.extrair` |
@@ -58,7 +59,13 @@ galho de degradacao (`response_format` ausente) so dispara em HTTP 400, que `gpt
 produz, e segue coberto somente por teste com duplo. "LLM verificado" nao e o mesmo que "os dois
 caminhos de D-02 verificados".
 
-**Armadilha operacional (D-13):** o padrao de `LLM_BASE_URL` no codigo aponta para a OpenAI
-enquanto a chave real e do Groq. Exportar `LLM_API_KEY` sem `LLM_BASE_URL` manda a chave para o
-provedor errado, toma 401 e degrada em silencio para o heuristico. Por isso o `.env.example`
-carrega a combinacao verificada: o caminho de copia e o caminho feliz.
+**Armadilha operacional (D-13), fechada por construcao:** o desenho anterior deixava o padrao de
+`LLM_BASE_URL` apontando para a OpenAI enquanto a chave real e do Groq — exportar `LLM_API_KEY`
+sozinha mandava a chave para o provedor errado, tomava 401 e degradava em silencio para o
+heuristico. **O usuario inverteu os dois padroes**, endpoint e modelo juntos, e a armadilha deixou
+de existir no caminho padrao: so `LLM_API_KEY` precisa ser configurada. Inverter apenas o endpoint
+teria movido a falha de porta, porque `gpt-4o-mini` nao existe no Groq e daria 400/404 com a mesma
+degradacao silenciosa. **Residual invertido, muito menor:** quem tiver chave da *OpenAI* e nao
+definir nenhuma das duas variaveis manda essa chave para o Groq e toma 401 — caso improvavel,
+porque nao existe chave da OpenAI neste projeto, e ainda visivel pelo `.env.example` e pela
+mensagem de degradacao que chega ao vendedor (D-06/D-07).
