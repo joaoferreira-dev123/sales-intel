@@ -89,11 +89,14 @@ Trazidas para a discussão já decididas. Downstream agents tratam como fixas:
   é a estratégia de recuperação; retry só dobraria a espera do vendedor antes de
   entregar o mesmo resultado, e com 10 URLs poderia travar a demonstração por minutos.
 
-- **D-04:** Cria **`app/config.py` lendo apenas `LLM_API_KEY`, `LLM_MODELO`,
-  `LLM_MAX_CHARS`**, mais `.env.example` (item de "pronto" da §17). `FETCH_TIMEOUT`,
-  `CACHE_VALIDADE_DIAS` e `USER_AGENT` permanecem hardcoded nesta fase — pertencem a
-  fases já entregues e testadas, e mexer nelas hoje é superfície de regressão sem
-  retorno de demonstração. Fecha parcialmente a divergência da §13.
+- **D-04:** *(emendada em 2026-08-26, pré-execução — ver `<context_update>` no fim do
+  arquivo; era três variáveis, passa a quatro)* Cria **`app/config.py` lendo apenas
+  `LLM_API_KEY`, `LLM_MODELO`, `LLM_MAX_CHARS` e `LLM_BASE_URL`**, mais `.env.example`
+  (item de "pronto" da §17). `LLM_BASE_URL` tem **padrão `https://api.openai.com/v1`** —
+  o endpoint não pode ficar cravado no código, porque a chave que chegou é de outro
+  provedor. `FETCH_TIMEOUT`, `CACHE_VALIDADE_DIAS` e `USER_AGENT` permanecem hardcoded
+  nesta fase — pertencem a fases já entregues e testadas, e mexer nelas hoje é superfície
+  de regressão sem retorno de demonstração. Fecha parcialmente a divergência da §13.
   — **Reversibility:** reversible — as demais variáveis migram para `config.py` depois
   sem tocar em chamador nenhum.
 
@@ -156,11 +159,50 @@ Trazidas para a discussão já decididas. Downstream agents tratam como fixas:
   **Não** criar `tests/` com 4 arquivos (§12) nesta fase: reorganizar layout de teste
   agora é churn sem valor de demonstração. Divergência registrada abaixo.
 
+### Chegada da chave de API *(2026-08-26, pré-execução)*
+
+Contexto narrativo completo na seção de atualização de contexto, no fim do arquivo. As
+decisões em si moram aqui, nesta seção, porque é ela que o gate de cobertura varre.
+
+> **Não escreva o nome da tag de abertura desta seção em prosa aqui dentro** — nem entre
+> crases. O parser de `check.decision-coverage-plan` trata a menção como uma nova tag de
+> abertura e passa a contar o bloco a partir dela, descartando em silêncio tudo que veio
+> antes. Custou uma contagem de 12 para 2 nesta fase, com o gate ainda reportando
+> `passed: true`.
+
+- **D-13:** **`LLM_BASE_URL` entra no `config.py` como quarta variável**, com padrão
+  `https://api.openai.com/v1`. O provedor é o **Groq**, compatível com a API da OpenAI,
+  então o endpoint não pode ser constante de módulo em `app/extractor.py` — vira
+  `config.LLM_BASE_URL`. Emenda D-04, que travava três variáveis. **Estende a SPEC §13**,
+  que lista oito variáveis e não inclui `LLM_BASE_URL`; extensão aditiva, registrada na
+  tabela de divergências.
+  — **Reversibility:** reversible — leitura de ambiente com padrão; remover depois toca
+  um arquivo.
+  — **Armadilha operacional:** padrão aponta para a OpenAI enquanto a chave real é do
+  Groq. Exportar só `LLM_API_KEY` manda chave do Groq para a OpenAI e toma 401 — que
+  degrada para o heurístico em vez de quebrar, mas degrada *silenciosamente* para quem
+  não ler o aviso. O `.env.example` carrega a combinação verificada para que o caminho
+  de cópia seja o caminho feliz.
+
+- **D-14:** **As ondas 4–6 passam a ser verificáveis contra modelo real.** A verdade
+  *"com chave, o briefing vem rico"* deixa de ser `verification: backstop` e vira verdade
+  explícita nos `must_haves` do plano 05-05. Entra uma tarefa de verificação com 2 ou 3
+  URLs reais, `autonomous: false`, que **pula com registro** quando não há chave em vez de
+  falhar a fase.
+  — `openai/gpt-oss-120b` é, na conta do usuário, o único modelo grande com suporte a
+  `structured_outputs`; os demais só têm `json_mode`. Confirma o caminho primário de D-02
+  e trava a escolha de modelo.
+  — **Limite da verificação:** o galho de degradação de D-02 dispara só em HTTP 400
+  citando `response_format`. Com `gpt-oss-120b` ele **não é exercitado** pela verificação
+  com modelo real e continua coberto apenas por teste com duplo. "LLM verificado" não é
+  "os dois caminhos de D-02 verificados".
+
 ### Claude's Discretion
 
 Nenhuma pergunta foi respondida com "você decide". As áreas **B (Cache)** e
 **D (Injeção e teste)** foram delegadas por inteiro ao Claude pelo usuário e estão
-resolvidas em D-09 a D-12 acima.
+resolvidas em D-09 a D-12 acima. D-13 e D-14 vieram de informação trazida pelo usuário
+depois do planejamento, não de delegação.
 
 </decisions>
 
@@ -184,14 +226,21 @@ variáveis (§13 — entram 3) · `tests/` em 4 arquivos (§12) · `README.md`, 
 `Dockerfile`, `docker-compose.yml` (§12, §17, §18 — Fase 7) · exportar briefing
 (§4 item 8) · conjunto de avaliação de prompt (§11 — precisa de chave).
 
-**Risco que o desenho não elimina:** sem a chave, os itens 4–6 sobem sem verificação
-contra um modelo real. O prompt pode devolver formato inesperado na primeira chamada
-de verdade. A garantia estrutural é que o caminho não verificado só consegue falhar
-*para dentro* do caminho verificado — LLM quebra, heurístico entrega. É por isso que o
-item 2 vem antes do item 4, e não depois.
+**Risco que o desenho não elimina — ~~sem a chave~~, RESOLVIDO em 2026-08-26:** a chave
+chegou antes da execução (ver `<context_update>`). Os itens 4–6 **passam a ser
+verificáveis contra um modelo real**: rodar 2 ou 3 URLs reais antes da apresentação.
 
-Se a chave chegar antes das 17h, o item 4 passa a ser verificável: rodar 2 ou 3 URLs
-reais antes da apresentação.
+A ordem **não muda por isso**. O item 1 conserta um crash que independe da chave, e a
+garantia estrutural continua valendo — o caminho do LLM só consegue falhar *para dentro*
+do caminho heurístico, e é isso que o item 2 trava. A chegada da chave transforma o item
+2 de "única rede de segurança" em "rede de segurança verificada dos dois lados", o que
+reforça a ordem em vez de inverter.
+
+O risco residual deixa de ser "o prompt pode devolver formato inesperado" e passa a ser
+**quota, latência e custo reais do provedor durante a demonstração ao vivo** — e o
+caminho de degradação de D-02 (`json_schema` → JSON pedido no prompt) deixa de ser o
+caminho esperado e passa a ser um galho que só dispara em HTTP 400, portanto **não
+exercitado pela verificação com modelo real** e coberto apenas por teste com duplo.
 
 </execution_order>
 
@@ -281,7 +330,8 @@ Levantadas na leitura de 2026-08-26. As três primeiras viraram decisão; as dem
 |---|---|---|
 | §8 coluna `conteudo_hash` | ausente em `db.py` | **Adiada** — D-10 |
 | §12 `app/config.py` | ausente; `os.getenv` inline em `extractor.py:77` | **Parcial** — D-04 |
-| §13 oito variáveis de ambiente | código lê 1, crava o resto | **Parcial** — D-04 (entram 3) |
+| §13 oito variáveis de ambiente | código lê 1, crava o resto | **Parcial** — D-04 (entram 3 das 8) |
+| §13 não prevê `LLM_BASE_URL` | provedor real exige endpoint configurável | **Estende (aditivo)** — D-13; 4ª variável, fora das 8 da §13 |
 | §12 `tests/` com 4 arquivos | `test_smoke.py` na raiz, 3 testes | **Adiada** — D-12 |
 | §17 `.env.example` obrigatório | ausente | **Fecha** — D-04 |
 | §10 `/health` = `{"status":"ok"}` | conforme | **Estende (aditivo)** — D-08 |
@@ -316,7 +366,36 @@ Levantado durante a discussão, pertence a outra fase. Não perder:
 
 </deferred>
 
+<context_update>
+## Atualização de contexto — 2026-08-26, antes da execução
+
+**A chave de API chegou.** Informado pelo usuário depois do planejamento e antes de
+`/gsd-execute-phase`. Emenda D-04 e acrescenta D-13 e D-14. Os planos foram revisados
+para refletir isto; nada aqui reabre L-01..L-06.
+
+**Configuração real, verificada pelo usuário:**
+
+```
+LLM_BASE_URL=https://api.groq.com/openai/v1
+LLM_MODELO=openai/gpt-oss-120b
+LLM_MAX_CHARS=12000
+```
+
+**As decisões formais estão na seção de decisões**, na subseção *"Chegada da chave de
+API"* — **D-13** (`LLM_BASE_URL` como quarta variável, padrão OpenAI, armadilha
+operacional) e **D-14** (ondas 4–6 verificáveis, backstop vira verdade explícita, limite
+da verificação quanto ao galho de degradação de D-02).
+
+Ficam ali, e não aqui, por um motivo concreto: o gate `check.decision-coverage-plan` varre
+apenas aquele bloco. Com D-13 e D-14 só nesta seção, o gate reportava `total: 12` e
+passava — as duas decisões mais recentes ficavam invisíveis justamente para o gate que
+existe para impedir decisão perdida. Decisão nova nesta fase vai para lá; esta seção
+guarda a narrativa.
+
+</context_update>
+
 ---
 
 *Phase: 5-LLM*
 *Context gathered: 2026-08-26*
+*Context updated: 2026-08-26 (chave de API recebida — D-04 emendada, D-13 e D-14 acrescentadas)*

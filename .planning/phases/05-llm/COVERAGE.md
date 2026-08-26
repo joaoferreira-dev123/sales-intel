@@ -1,8 +1,18 @@
 # Phase 5 — Cobertura da API externa
 
 **Gerado:** 2026-08-26
-**API externa:** endpoint de *chat completions* compativel com OpenAI, chamado por `httpx`
-direto (D-01). Provedor concreto ainda desconhecido — a chave nao chegou.
+**Atualizado:** 2026-08-26 (chave recebida — provedor conhecido; D-13, D-14)
+
+**API externa:** **Groq**, endpoint de *chat completions* compativel com a API da OpenAI
+(`https://api.groq.com/openai/v1`), chamado por `httpx` direto (D-01). A escolha de D-01 —
+`httpx` em vez de SDK — se pagou aqui: o provedor mudou entre o planejamento e a execucao e
+nenhuma linha de codigo de chamada precisou mudar.
+
+**Modelo:** `openai/gpt-oss-120b`, escolhido por ser o **unico modelo grande da conta com
+suporte a `structured_outputs`** — os demais so oferecem `json_mode`. Essa e exatamente a
+capacidade que o caminho primario de D-02 exige, entao a escolha de modelo trava junto com a
+decisao: trocar `LLM_MODELO` por outro modelo da conta cai no galho de degradacao de D-02, e nao
+no caminho principal (D-14).
 
 > **Nota:** o detector deterministico de api-coverage devolveu `detected: false` para esta fase.
 > E falso negativo: o vocabulario de gatilho do detector e em ingles e o escopo desta fase esta
@@ -14,10 +24,11 @@ direto (D-01). Provedor concreto ainda desconhecido — a chave nao chegou.
 | Capacidade | Uso nesta fase | Onde |
 |---|---|---|
 | `POST /chat/completions` | **USADA** — uma chamada por URL, sincrona | `LLMExtractor._chamar_provedor` |
-| `model` | **USADA** — vem de `config.LLM_MODELO`, padrao `gpt-4o-mini` (SPEC §13) | `app/config.py` |
+| Endereco base do endpoint | **USADA** — vem de `config.LLM_BASE_URL`, padrao `https://api.openai.com/v1`, valor em uso `https://api.groq.com/openai/v1` (D-13) | `app/config.py` |
+| `model` | **USADA** — vem de `config.LLM_MODELO`; padrao no codigo `gpt-4o-mini` (SPEC §13), valor em uso `openai/gpt-oss-120b` (D-14) | `app/config.py` |
 | `messages` (papeis `system` + `user`) | **USADA** — instrucao e dado em mensagens separadas (D-11) | `LLMExtractor._montar_mensagens` |
-| `response_format: json_schema` | **USADA** — schema derivado de `Briefing.model_json_schema()` (D-02) | `LLMExtractor._chamar_provedor` |
-| `response_format` ausente (JSON pedido no prompt) | **USADA** — caminho de degradacao de D-02, disparado por HTTP 400 citando `response_format` | `LLMExtractor.extrair` |
+| `response_format: json_schema` (`structured_outputs`) | **USADA — caminho primario, verificado contra modelo real** — schema derivado de `Briefing.model_json_schema()` (D-02); e a capacidade pela qual `gpt-oss-120b` foi escolhido (D-14) | `LLMExtractor._chamar_provedor` |
+| `response_format` ausente (JSON pedido no prompt) | **USADA — galho de degradacao, coberto so por duplo** — D-02, disparado por HTTP 400 citando `response_format`. `gpt-oss-120b` nao produz esse 400, entao a verificacao com modelo real **nao** exercita este caminho (D-14) | `LLMExtractor.extrair` |
 | `temperature` | **USADA** — fixada em `0`, para reduzir variacao entre execucoes | `LLMExtractor._chamar_provedor` |
 | `Authorization: Bearer` | **USADA** — unica forma de autenticacao; chave so por variavel de ambiente (SPEC §6) | `LLMExtractor._chamar_provedor` |
 
@@ -32,10 +43,22 @@ direto (D-01). Provedor concreto ainda desconhecido — a chave nao chegou.
 | Batch API / requisicoes assincronas | **OPT-OUT** | o vendedor espera segundos, nao minutos; o fluxo e sincrono por desenho (SPEC §3) |
 | Embeddings, moderacao, arquivos, assistentes | **OPT-OUT** | fora do escopo do produto (SPEC §4) |
 | `max_tokens`, `top_p`, `seed`, penalidades | **OPT-OUT** | knob sem retorno de demonstracao; o controle de custo que importa e o corte de entrada de L-04 |
-| SDK oficial do provedor | **OPT-OUT** | D-01: `httpx` direto evita pacote novo antes da demo e serve qualquer endpoint compativel (L-06) |
-| `LLM_BASE_URL` configuravel por ambiente | **OPT-OUT** | D-04 trava `config.py` em tres variaveis; o endpoint e constante de modulo em `app/extractor.py`, preservando "um arquivo so" da SPEC §7 item 4 |
+| SDK oficial do provedor | **OPT-OUT** | D-01: `httpx` direto evita pacote novo antes da demo e serve qualquer endpoint compativel (L-06). Confirmado na pratica quando o provedor virou Groq |
+| `json_mode` (`response_format: {"type": "json_object"}`) | **OPT-OUT** | os outros modelos grandes da conta so oferecem isto; `gpt-oss-120b` foi escolhido justamente para usar `structured_outputs` (D-14). O sistema ainda degrada para JSON pedido no prompt se algum dia rodar contra modelo sem schema nativo |
 
 ## Limitacao registrada
 
-Nada nesta matriz foi exercitado contra um provedor real: **nao existe chave de API nesta fase**.
-Ver a verdade marcada `verification: backstop` em `05-05-PLAN.md`.
+**Verificacao contra provedor real:** a chave chegou antes da execucao (D-13/D-14). A Task 4 do
+`05-05-PLAN.md` roda 2 ou 3 URLs reais contra `openai/gpt-oss-120b` no endpoint do Groq — a
+verdade *"com chave, o briefing vem rico"* deixou de ser `verification: backstop` e virou verdade
+explicita nos `must_haves` de `05-05`.
+
+**O que essa verificacao ainda nao cobre:** apenas o caminho primario de D-02 e exercitado. O
+galho de degradacao (`response_format` ausente) so dispara em HTTP 400, que `gpt-oss-120b` nao
+produz, e segue coberto somente por teste com duplo. "LLM verificado" nao e o mesmo que "os dois
+caminhos de D-02 verificados".
+
+**Armadilha operacional (D-13):** o padrao de `LLM_BASE_URL` no codigo aponta para a OpenAI
+enquanto a chave real e do Groq. Exportar `LLM_API_KEY` sem `LLM_BASE_URL` manda a chave para o
+provedor errado, toma 401 e degrada em silencio para o heuristico. Por isso o `.env.example`
+carrega a combinacao verificada: o caminho de copia e o caminho feliz.
