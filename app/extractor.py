@@ -23,6 +23,7 @@ import re
 from typing import Protocol
 
 import httpx
+from pydantic import ValidationError
 
 from . import config
 from .schemas import Briefing
@@ -33,6 +34,11 @@ TEL_RE = re.compile(r"\(?\d{2}\)?\s?9?\d{4}[-\s]?\d{4}")
 
 class LLMError(RuntimeError):
     """Falha ao gerar briefing via LLM. Guarda o motivo para virar mensagem curta ao vendedor."""
+
+
+class _SemJsonSchema(Exception):
+    """Sinaliza que o provedor rejeitou response_format, disparando a unica
+    segunda chamada permitida (D-02). Nunca chega ao vendedor."""
 
 
 # D-03: sem retry. O fallback heuristico ja e a estrategia de recuperacao;
@@ -83,8 +89,6 @@ class LLMExtractor:
     do schema Briefing. A validacao do Pydantic e a rede de seguranca:
     se o modelo devolver algo fora do formato, levanta erro em vez de
     entregar lixo para o vendedor.
-
-    Ainda nao ligado: aguardando chave de API.
     """
 
     nome = "llm"
@@ -151,13 +155,87 @@ class LLMExtractor:
             {"role": "user", "content": usuario},
         ]
 
+    def _chamar_provedor(self, mensagens: list[dict], usar_json_schema: bool) -> str:
+        """
+        POST unico ao endpoint de chat completions, sem repeticao alguma
+        (D-03) — o fallback heuristico e a estrategia de recuperacao,
+        chamar de novo so dobraria a espera do vendedor.
+        """
+        corpo: dict = {
+            "model": self.modelo,
+            "messages": mensagens,
+            "temperature": 0,
+        }
+        if usar_json_schema:
+            # strict=False de proposito: o modo estrito de provedores
+            # compativeis com OpenAI exige additionalProperties=false e
+            # todos os campos em required, que o schema derivado do
+            # Pydantic nao produz. A garantia real fica na validacao
+            # Briefing(**dados) na volta (D-02, L-03).
+            corpo["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "briefing",
+                    "strict": False,
+                    "schema": Briefing.model_json_schema(),
+                },
+            }
+
+        try:
+            with httpx.Client(
+                timeout=LLM_TIMEOUT,
+                headers={
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json",
+                },
+            ) as client:
+                resp = client.post(f"{config.LLM_BASE_URL}/chat/completions", json=corpo)
+        except httpx.TimeoutException:
+            raise LLMError("A IA demorou demais para responder.")
+        except httpx.RequestError as ex:
+            raise LLMError(f"Nao consegui alcancar a IA: {type(ex).__name__}")
+
+        if (
+            resp.status_code == 400
+            and usar_json_schema
+            and ("response_format" in resp.text or "json_schema" in resp.text)
+        ):
+            # Unica leitura do corpo permitida, so para decidir o caminho de
+            # degradacao (D-02) — nunca para compor mensagem de erro.
+            raise _SemJsonSchema()
+
+        if not 200 <= resp.status_code < 300:
+            raise LLMError(f"A IA respondeu {resp.status_code}.")
+
+        try:
+            return resp.json()["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, TypeError, ValueError):
+            raise LLMError("A IA devolveu uma resposta em formato inesperado.")
+
     def extrair(self, url: str, titulo: str, texto: str) -> Briefing:
         if not self.disponivel():
             raise RuntimeError("Sem chave de API configurada.")
-        # Corte de custo: texto longo demais nao melhora o resultado e
-        # multiplica o preco por chamada.
-        _trecho = texto[: config.LLM_MAX_CHARS]
-        raise NotImplementedError("Chamada ao LLM entra quando a chave chegar.")
+
+        mensagens = self._montar_mensagens(url, titulo, texto)
+
+        try:
+            conteudo = self._chamar_provedor(mensagens, usar_json_schema=True)
+        except _SemJsonSchema:
+            # Unica segunda chamada permitida (D-02): as mensagens ja
+            # carregam o schema no prompt, entao ele nao muda.
+            conteudo = self._chamar_provedor(mensagens, usar_json_schema=False)
+
+        try:
+            dados = json.loads(conteudo)
+        except json.JSONDecodeError:
+            raise LLMError("A IA devolveu algo que nao e JSON.")
+
+        try:
+            return Briefing(**dados)
+        except (TypeError, ValidationError):
+            # L-03/SPEC S11: formato invalido levanta erro em vez de
+            # entregar dado ruim ao vendedor.
+            raise LLMError("A IA devolveu JSON fora do formato do briefing.")
 
 
 def escolher_extrator() -> Extractor:
