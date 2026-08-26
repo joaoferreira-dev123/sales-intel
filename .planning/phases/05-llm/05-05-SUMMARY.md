@@ -177,3 +177,12 @@ None - usuário já havia colocado `LLM_API_KEY` no `.env` local (fora do git) a
 ---
 *Phase: 05-llm*
 *Completed: 2026-08-26*
+
+## Self-Check: PASSED
+- FOUND: app/extractor.py
+- FOUND: test_smoke.py
+- FOUND: .planning/phases/05-llm/05-05-SUMMARY.md
+- FOUND commit: aec987e (Task 1)
+- FOUND commit: 14f0bd5 (Task 2)
+- FOUND commit: dd7ec9f (Task 3)
+- FOUND commit: 1db2d2b (SUMMARY docs commit)
