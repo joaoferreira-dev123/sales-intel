@@ -1,4 +1,9 @@
 ﻿"""Testes que rodam sem internet."""
+from datetime import datetime, timezone
+
+from fastapi.testclient import TestClient
+
+from app import db, main
 from app.extractor import HeuristicExtractor, LLMExtractor, escolher_extrator
 from app.fetcher import extrair_texto
 
@@ -38,4 +43,32 @@ def test_escolher_extrator_sem_chave_devolve_heuristico(monkeypatch):
 def test_escolher_extrator_com_chave_devolve_llm(monkeypatch):
     monkeypatch.setenv("LLM_API_KEY", "chave-de-teste-sem-valor")
     assert isinstance(escolher_extrator(), LLMExtractor)
+
+def test_extrator_que_falha_nao_derruba_a_requisicao(monkeypatch):
+    class ExtratorQuebrado:
+        nome = "llm"
+
+        def extrair(self, url, titulo, texto):
+            raise RuntimeError("provedor fora do ar")
+
+    monkeypatch.setattr(main, "escolher_extrator", lambda: ExtratorQuebrado())
+    monkeypatch.setattr(main, "buscar_html", lambda url: HTML)
+    monkeypatch.setattr(db, "salvar", lambda *args, **kwargs: datetime.now(timezone.utc))
+    monkeypatch.setattr(db, "buscar", lambda *args, **kwargs: None)
+
+    # Sem "with": nao dispara o lifespan, entao nao chama db.criar_tabelas()
+    # nem cria o arquivo briefings.db.
+    client = TestClient(main.app)
+    resp = client.post(
+        "/api/briefings",
+        json={"urls": ["https://acme.com.br"], "forcar_atualizacao": True},
+    )
+
+    assert resp.status_code == 200
+    dados = resp.json()
+    assert len(dados) == 1
+    item = dados[0]
+    assert item["extrator"] == "heuristico"
+    assert item["briefing"]["confianca"] == "baixa"
+    assert item["origem"] == "novo"
 
