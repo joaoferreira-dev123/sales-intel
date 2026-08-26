@@ -8,6 +8,7 @@ Fluxo de uma requisicao:
 """
 
 from datetime import datetime, timezone
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
@@ -23,6 +24,11 @@ app = FastAPI(
     description="Gera briefing de cliente a partir de links, para a equipe de vendas.",
     version="0.1.0",
 )
+
+# Caminhos absolutos: servir a UI nao pode depender do working directory de
+# onde o uvicorn foi iniciado.
+BASE_DIR = Path(__file__).resolve().parent.parent
+STATIC_DIR = BASE_DIR / "static"
 
 
 @app.on_event("startup")
@@ -129,10 +135,10 @@ def historico(limite: int = 50) -> list[dict]:
     return db.listar(limite)
 
 
-app.mount("/static", StaticFiles(directory="static"), name="static")
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
 @app.get("/")
 def home() -> FileResponse:
-    return FileResponse("static/index.html")
+    return FileResponse(STATIC_DIR / "index.html")
 
