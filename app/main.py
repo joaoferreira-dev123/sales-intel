@@ -160,7 +160,13 @@ def usuario_atual(request: Request) -> Usuario:
     usuario = auth.validar_sessao(token) if token else None
     if usuario is None:
         raise HTTPException(status_code=401, detail=MSG_NAO_AUTENTICADO)
-    return Usuario(**usuario)
+    try:
+        return Usuario(**usuario)
+    except ValidationError:
+        # WR-02: uma linha corrompida (ex.: `papel` fora do enum, escrito
+        # por fora da API) nao pode virar 500 em toda rota autenticada —
+        # trata como sessao invalida em vez de propagar.
+        raise HTTPException(status_code=401, detail=MSG_NAO_AUTENTICADO)
 
 
 def exigir_admin(usuario: Usuario = Depends(usuario_atual)) -> Usuario:

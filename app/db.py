@@ -49,7 +49,7 @@ def criar_tabelas() -> None:
                 id         TEXT PRIMARY KEY,
                 username   TEXT NOT NULL UNIQUE,
                 senha_hash TEXT NOT NULL,
-                papel      TEXT NOT NULL,
+                papel      TEXT NOT NULL CHECK (papel IN ('vendedor', 'admin')),
                 ativo      INTEGER NOT NULL DEFAULT 1,
                 criado_em  TEXT NOT NULL
             )
