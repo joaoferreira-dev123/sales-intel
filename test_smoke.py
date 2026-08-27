@@ -164,6 +164,41 @@ def test_cache_incompativel_com_o_schema_vira_miss(monkeypatch):
     assert item["extrator"] == "heuristico"
     assert item["briefing"]["empresa"] == "Acme Tecnologia"
 
+def test_cache_com_extrator_fora_da_enumeracao_vira_miss(monkeypatch):
+    # WR-01: uma linha de cache com extrator fora da enumeracao da SPEC S8
+    # (aqui, "gpt-5-turbo", gravada por um refactor futuro) e dado velho, nao
+    # erro do usuario. "gpt-5-turbo" nao e "heuristico" de proposito: a regra
+    # de upgrade de D-09 nao pode transformar esta linha em miss por conta
+    # propria - o miss precisa vir da validacao da enumeracao no
+    # BriefingResponse, e e isso que este teste isola.
+    monkeypatch.delenv("LLM_API_KEY", raising=False)
+
+    linha_velha = (
+        {"empresa": "Antiga SA", "resumo": "briefing gravado por um refactor futuro"},
+        "gpt-5-turbo",
+        datetime.now(timezone.utc),
+    )
+    monkeypatch.setattr(db, "buscar", lambda *args, **kwargs: linha_velha)
+    monkeypatch.setattr(main, "buscar_html", lambda url: HTML)
+    monkeypatch.setattr(db, "salvar", lambda *args, **kwargs: datetime.now(timezone.utc))
+
+    # Sem "with": nao dispara o lifespan, entao nao chama db.criar_tabelas()
+    # nem cria o arquivo briefings.db.
+    client = TestClient(main.app)
+    resp = client.post(
+        "/api/briefings",
+        json={"urls": ["https://acme.com.br"]},
+    )
+
+    assert resp.status_code == 200
+    dados = resp.json()
+    assert len(dados) == 1
+    item = dados[0]
+    assert item["origem"] == "novo"
+    assert item["extrator"] == "heuristico"
+    # Veio da extracao fresca, nao da linha antiga (cujo empresa era "Antiga SA").
+    assert item["briefing"]["empresa"] == "Acme Tecnologia"
+
 def test_falha_dupla_devolve_briefing_de_falha_sem_vazar_excecao(monkeypatch):
     # WR-03: quando os dois extratores falham, o degrau 3 de
     # _extrair_com_fallback nao pode interpolar str() da excecao do
