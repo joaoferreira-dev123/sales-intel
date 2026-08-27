@@ -280,3 +280,41 @@ def semear_admin_inicial() -> str | None:
 
     usuario = criar_usuario(username, senha, "admin")
     return usuario["id"]
+
+
+def encerrar_sessoes_do_usuario(usuario_id: str) -> int:
+    """Remove todas as sessoes daquele usuario e devolve quantas foram
+    removidas. Usada por `definir_ativo` no caminho de desativacao."""
+    with closing(db.conectar()) as conn, conn:
+        cursor = conn.execute(
+            "DELETE FROM sessoes WHERE usuario_id = ?", (usuario_id,)
+        )
+        return cursor.rowcount
+
+
+def definir_ativo(usuario_id: str, ativo: bool) -> dict | None:
+    """Atualiza a coluna `ativo` do usuario e devolve o dict atualizado, ou
+    None se o id nao existe. Quando `ativo` e falso, encerra na mesma
+    operacao todas as sessoes vivas do usuario: mudar so a coluna sem
+    apagar a sessao deixaria o usuario desativado navegando ate a sessao
+    expirar sozinha, e revogacao imediata e justamente o que D-16 comprou
+    ao guardar sessao em tabela."""
+    if buscar_usuario_por_id(usuario_id) is None:
+        return None
+
+    with closing(db.conectar()) as conn, conn:
+        conn.execute(
+            "UPDATE usuarios SET ativo = ? WHERE id = ?",
+            (1 if ativo else 0, usuario_id),
+        )
+
+    if not ativo:
+        encerrar_sessoes_do_usuario(usuario_id)
+
+    usuario = buscar_usuario_por_id(usuario_id)
+    return {
+        "id": usuario["id"],
+        "username": usuario["username"],
+        "papel": usuario["papel"],
+        "ativo": bool(usuario["ativo"]),
+    }

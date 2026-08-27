@@ -95,3 +95,24 @@ class Usuario(BaseModel):
     papel: Literal["vendedor", "admin"]
     ativo: bool
 
+
+class CriarUsuarioRequest(BaseModel):
+    """O que o admin envia para cadastrar um vendedor ou outro admin.
+    `papel` fecha a enumeracao de L-08 no proprio tipo — um papel inventado
+    vira 422 antes de qualquer codigo de rota rodar."""
+
+    username: str = Field(min_length=3, max_length=64)
+    senha: str = Field(
+        min_length=12,
+        max_length=128,
+        description="Mesmo minimo do seed de admin (D-19) — a politica de senha e uma so",
+    )
+    papel: Literal["vendedor", "admin"]
+
+
+class AlterarAtivoRequest(BaseModel):
+    """O que o admin envia para ativar/desativar um usuario. O id do alvo
+    vem sempre do caminho da rota, nunca deste corpo."""
+
+    ativo: bool
+

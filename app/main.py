@@ -19,7 +19,15 @@ from pydantic import ValidationError
 from . import auth, config, db
 from .extractor import HeuristicExtractor, LLMError, escolher_extrator
 from .fetcher import FetchError, buscar_html, extrair_texto
-from .schemas import Briefing, BriefingRequest, BriefingResponse, LoginRequest, Usuario
+from .schemas import (
+    AlterarAtivoRequest,
+    Briefing,
+    BriefingRequest,
+    BriefingResponse,
+    CriarUsuarioRequest,
+    LoginRequest,
+    Usuario,
+)
 
 app = FastAPI(
     title="Sales Intel",
@@ -39,6 +47,9 @@ AVISO_CACHE_INDISPONIVEL = "Briefing gerado, mas nao foi possivel gravar no cach
 MSG_FALHA_GENERICA = "Nao foi possivel gerar o briefing para este link."
 MSG_NAO_AUTENTICADO = "Sessao ausente ou expirada. Faca login."
 MSG_SEM_PERMISSAO = "Esta area e restrita a administradores."
+MSG_USERNAME_EM_USO = "Ja existe um usuario com este username."
+MSG_USUARIO_NAO_ENCONTRADO = "Usuario nao encontrado."
+MSG_NAO_PODE_DESATIVAR_A_SI_MESMO = "Voce nao pode desativar a propria conta."
 
 # WR-04: sem nenhum controle, qualquer chamador anonimo drena custo de LLM
 # ilimitado batendo em loop em /api/briefings (cada URL nao cacheada dispara
@@ -223,6 +234,38 @@ def eu(usuario: Usuario = Depends(usuario_atual)) -> Usuario:
 def listar_usuarios(usuario: Usuario = Depends(exigir_admin)) -> list[Usuario]:
     """Lista de usuarios, restrita a admin (L-07/T-06-10)."""
     return [Usuario(**u) for u in auth.listar_usuarios()]
+
+
+@app.post("/api/admin/usuarios", response_model=Usuario)
+def cadastrar_usuario(
+    dados: CriarUsuarioRequest, usuario: Usuario = Depends(exigir_admin)
+) -> Usuario:
+    """Cria um vendedor ou outro admin. Restrita a admin (L-07)."""
+    try:
+        novo = auth.criar_usuario(dados.username, dados.senha, dados.papel)
+    except ValueError:
+        # D-06: nunca interpolamos o texto da excecao do banco — o admin le
+        # apenas a frase generica, nunca a mensagem crua do SQLite.
+        raise HTTPException(status_code=409, detail=MSG_USERNAME_EM_USO)
+    return Usuario(**novo)
+
+
+@app.post("/api/admin/usuarios/{usuario_id}/ativo", response_model=Usuario)
+def alterar_ativo(
+    usuario_id: str,
+    dados: AlterarAtivoRequest,
+    usuario: Usuario = Depends(exigir_admin),
+) -> Usuario:
+    """Ativa ou desativa um usuario. Restrita a admin (L-07). Um admin nao
+    pode desativar a si mesmo — evita o sistema ficar sem nenhum
+    administrador ativo por um clique."""
+    if usuario_id == usuario.id and not dados.ativo:
+        raise HTTPException(status_code=400, detail=MSG_NAO_PODE_DESATIVAR_A_SI_MESMO)
+
+    atualizado = auth.definir_ativo(usuario_id, dados.ativo)
+    if atualizado is None:
+        raise HTTPException(status_code=404, detail=MSG_USUARIO_NAO_ENCONTRADO)
+    return Usuario(**atualizado)
 
 
 @app.post("/api/auth/logout")

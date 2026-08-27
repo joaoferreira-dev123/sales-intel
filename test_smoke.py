@@ -760,3 +760,128 @@ def test_senha_de_admin_curta_levanta_com_mensagem_autorada(monkeypatch, tmp_pat
     assert senha_curta not in str(exc.value)
     assert auth.listar_usuarios() == []
 
+
+# Fase 6 (L-07/L-08/D-16/D-17): admin cadastra e desativa usuarios, e a
+# desativacao derruba a sessao viva na hora.
+NOVO_USUARIO_SENHA = "senha-de-teste-do-novo-usuario"
+
+
+def test_criar_usuario_sem_sessao_devolve_401(monkeypatch, tmp_path):
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "teste.db")
+    db.criar_tabelas()
+    main._requisicoes_por_ip.clear()
+    client = TestClient(main.app)
+    resp = client.post(
+        "/api/admin/usuarios",
+        json={"username": "novato", "senha": NOVO_USUARIO_SENHA, "papel": "vendedor"},
+    )
+    assert resp.status_code == 401
+
+
+def test_criar_usuario_com_sessao_de_vendedor_devolve_403(monkeypatch, tmp_path):
+    client = _cliente_autenticado(monkeypatch, tmp_path, papel="vendedor")
+    resp = client.post(
+        "/api/admin/usuarios",
+        json={"username": "novato", "senha": NOVO_USUARIO_SENHA, "papel": "vendedor"},
+    )
+    assert resp.status_code == 403
+
+
+def test_admin_cria_vendedor_e_o_vendedor_consegue_logar(monkeypatch, tmp_path):
+    client_admin = _cliente_autenticado(monkeypatch, tmp_path, papel="admin", username="chefe")
+    resp = client_admin.post(
+        "/api/admin/usuarios",
+        json={"username": "novato", "senha": NOVO_USUARIO_SENHA, "papel": "vendedor"},
+    )
+    assert resp.status_code == 200
+    corpo = resp.json()
+    assert corpo["username"] == "novato"
+    assert corpo["papel"] == "vendedor"
+    assert corpo["ativo"] is True
+
+    main._tentativas_login_por_ip.clear()
+    client_novo = TestClient(main.app)
+    resp_login = client_novo.post(
+        "/api/auth/login", json={"username": "novato", "senha": NOVO_USUARIO_SENHA}
+    )
+    assert resp_login.status_code == 200
+
+
+def test_username_duplicado_devolve_409_com_mensagem_autorada(monkeypatch, tmp_path):
+    client_admin = _cliente_autenticado(monkeypatch, tmp_path, papel="admin", username="chefe")
+    resp1 = client_admin.post(
+        "/api/admin/usuarios",
+        json={"username": "duplicado", "senha": NOVO_USUARIO_SENHA, "papel": "vendedor"},
+    )
+    assert resp1.status_code == 200
+
+    resp2 = client_admin.post(
+        "/api/admin/usuarios",
+        json={"username": "duplicado", "senha": NOVO_USUARIO_SENHA, "papel": "vendedor"},
+    )
+    assert resp2.status_code == 409
+    corpo = resp2.json()
+    assert corpo["detail"] == main.MSG_USERNAME_EM_USO
+    # D-06: nada do texto cru da excecao do banco vaza na resposta.
+    assert "UNIQUE" not in corpo["detail"]
+    assert "sqlite" not in corpo["detail"].lower()
+    assert "IntegrityError" not in corpo["detail"]
+
+
+def test_desativar_usuario_derruba_a_sessao_viva(monkeypatch, tmp_path):
+    client_admin = _cliente_autenticado(monkeypatch, tmp_path, papel="admin", username="chefe")
+    resp_cria = client_admin.post(
+        "/api/admin/usuarios",
+        json={"username": "alvo", "senha": NOVO_USUARIO_SENHA, "papel": "vendedor"},
+    )
+    assert resp_cria.status_code == 200
+    alvo_id = resp_cria.json()["id"]
+
+    main._tentativas_login_por_ip.clear()
+    client_vendedor = TestClient(main.app)
+    resp_login = client_vendedor.post(
+        "/api/auth/login", json={"username": "alvo", "senha": NOVO_USUARIO_SENHA}
+    )
+    assert resp_login.status_code == 200
+    # Sessao viva confirmada antes da desativacao.
+    assert client_vendedor.get("/api/auth/me").status_code == 200
+
+    resp_desativa = client_admin.post(
+        f"/api/admin/usuarios/{alvo_id}/ativo", json={"ativo": False}
+    )
+    assert resp_desativa.status_code == 200
+    assert resp_desativa.json()["ativo"] is False
+
+    # A proxima chamada do MESMO cliente (mesmo cookie) devolve 401: a
+    # sessao foi revogada no servidor, nao apenas marcada.
+    resp_apos = client_vendedor.get("/api/auth/me")
+    assert resp_apos.status_code == 401
+
+    # Reativado, o usuario consegue logar de novo.
+    resp_reativa = client_admin.post(
+        f"/api/admin/usuarios/{alvo_id}/ativo", json={"ativo": True}
+    )
+    assert resp_reativa.status_code == 200
+    assert resp_reativa.json()["ativo"] is True
+
+    main._tentativas_login_por_ip.clear()
+    client_novo_login = TestClient(main.app)
+    resp_login2 = client_novo_login.post(
+        "/api/auth/login", json={"username": "alvo", "senha": NOVO_USUARIO_SENHA}
+    )
+    assert resp_login2.status_code == 200
+
+
+def test_admin_nao_pode_desativar_a_si_mesmo(monkeypatch, tmp_path):
+    client_admin = _cliente_autenticado(monkeypatch, tmp_path, papel="admin", username="chefe")
+    resp_me = client_admin.get("/api/auth/me")
+    admin_id = resp_me.json()["id"]
+
+    resp = client_admin.post(f"/api/admin/usuarios/{admin_id}/ativo", json={"ativo": False})
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == main.MSG_NAO_PODE_DESATIVAR_A_SI_MESMO
+
+    # Continua ativo.
+    usuario = auth.buscar_usuario_por_id(admin_id)
+    assert usuario["ativo"] == 1
+
