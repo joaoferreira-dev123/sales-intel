@@ -7,10 +7,11 @@ Fluxo de uma requisicao:
     -> senao: busca a pagina, extrai texto, gera briefing, salva, devolve
 """
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from threading import Lock
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
@@ -36,6 +37,37 @@ STATIC_DIR = BASE_DIR / "static"
 # nunca o texto arbitrario de uma falha de terceiro (SQLite, heuristico, etc).
 AVISO_CACHE_INDISPONIVEL = "Briefing gerado, mas nao foi possivel gravar no cache."
 MSG_FALHA_GENERICA = "Nao foi possivel gerar o briefing para este link."
+
+# WR-04: sem nenhum controle, qualquer chamador anonimo drena custo de LLM
+# ilimitado batendo em loop em /api/briefings (cada URL nao cacheada dispara
+# uma chamada faturada quando LLM_API_KEY esta configurada). Um limite de
+# taxa por IP, em memoria, fecha o abuso trivial de "loop de requisicoes"
+# num prototipo de processo unico; nao substitui um API-gateway/API-key em
+# producao atras de multiplos workers, mas e a barreira minima descrita no
+# achado. Estado global de proposito: precisa sobreviver entre requisicoes
+# do mesmo processo.
+_RATE_LIMIT_JANELA = timedelta(minutes=1)
+_RATE_LIMIT_MAX_REQUISICOES = 20  # por IP, por janela
+_rate_limit_lock = Lock()
+_requisicoes_por_ip: dict[str, list[datetime]] = {}
+
+
+def _checar_rate_limit(request: Request) -> None:
+    """Dependency do FastAPI: levanta 429 se o IP do chamador excedeu o
+    limite de requisicoes na janela atual. Chamada antes de qualquer fetch
+    ou chamada de LLM."""
+    ip = request.client.host if request.client else "desconhecido"
+    agora = datetime.now(timezone.utc)
+    limite_inferior = agora - _RATE_LIMIT_JANELA
+    with _rate_limit_lock:
+        historico = _requisicoes_por_ip.setdefault(ip, [])
+        historico[:] = [t for t in historico if t >= limite_inferior]
+        if len(historico) >= _RATE_LIMIT_MAX_REQUISICOES:
+            raise HTTPException(
+                status_code=429,
+                detail="Muitas requisicoes deste endereco. Tente novamente em instantes.",
+            )
+        historico.append(agora)
 
 
 @app.on_event("startup")
@@ -97,7 +129,11 @@ def _extrair_com_fallback(
             return briefing, "falha", None
 
 
-@app.post("/api/briefings", response_model=list[BriefingResponse])
+@app.post(
+    "/api/briefings",
+    response_model=list[BriefingResponse],
+    dependencies=[Depends(_checar_rate_limit)],
+)
 def gerar_briefings(req: BriefingRequest) -> list[BriefingResponse]:
     """
     Recebe de 1 a 10 links e devolve um briefing por link.
