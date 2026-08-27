@@ -1,14 +1,16 @@
 ﻿"""Testes que rodam sem internet."""
+import json
 from datetime import datetime, timezone
 
 import pytest
 from fastapi.testclient import TestClient
 
-from app import db, main
+from app import db, extractor, main
 from app.extractor import (
     DELIM_FIM,
     DELIM_INICIO,
     HeuristicExtractor,
+    LLMError,
     LLMExtractor,
     escolher_extrator,
 )
@@ -253,6 +255,92 @@ def test_montar_mensagens_remove_delimitador_forjado():
     assert "Trecho legitimo depois do ataque." in conteudo
     assert "Titulo forjado" in conteudo
     assert "com delimitador" in conteudo
+
+class _RespostaFalsa:
+    """Duplo de httpx.Response: so os tres atributos que _chamar_provedor le."""
+
+    def __init__(self, status_code, texto, corpo_json=None):
+        self.status_code = status_code
+        self.text = texto
+        self._corpo_json = corpo_json
+
+    def json(self):
+        return self._corpo_json
+
+
+class _ClienteFalso:
+    """Duplo de httpx.Client: aceita qualquer kwarg no construtor, registra
+    os corpos recebidos em `post` e devolve a proxima resposta do roteiro
+    pre-carregado. `corpos_recebidos` e `roteiro` sao preenchidos por cada
+    teste antes da instalacao via monkeypatch."""
+
+    corpos_recebidos: list = []
+    roteiro: list = []
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def post(self, url, json=None):
+        _ClienteFalso.corpos_recebidos.append(json)
+        return _ClienteFalso.roteiro.pop(0)
+
+def test_degradacao_json_schema_faz_exatamente_uma_segunda_chamada(monkeypatch):
+    # D-02, caminho feliz do galho de degradacao: provedor rejeita
+    # response_format na primeira chamada, aceita JSON pedido no prompt na
+    # segunda. Exatamente uma segunda chamada, sem formato estruturado.
+    _ClienteFalso.corpos_recebidos = []
+    _ClienteFalso.roteiro = [
+        _RespostaFalsa(400, "erro: response_format nao suportado por este modelo"),
+        _RespostaFalsa(
+            200,
+            "",
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {"empresa": "Acme via LLM", "resumo": "briefing valido"}
+                            )
+                        }
+                    }
+                ]
+            },
+        ),
+    ]
+    monkeypatch.setattr(extractor.httpx, "Client", _ClienteFalso)
+
+    extrator = LLMExtractor(api_key="chave-de-teste-sem-valor")
+    briefing = extrator.extrair("https://acme.com.br", "Acme", "texto qualquer")
+
+    corpos = _ClienteFalso.corpos_recebidos
+    assert briefing.empresa == "Acme via LLM"
+    assert len(corpos) == 2
+    assert "response_format" in corpos[0]
+    assert set(corpos[1].keys()) == {"model", "messages", "temperature"}
+    assert corpos[0]["messages"] == corpos[1]["messages"]
+
+def test_segundo_400_de_json_schema_vira_llmerror(monkeypatch):
+    # D-03: o galho de degradacao nao vira laco. Um segundo 400 (mesmo motivo)
+    # vira LLMError sem uma terceira chamada.
+    _ClienteFalso.corpos_recebidos = []
+    _ClienteFalso.roteiro = [
+        _RespostaFalsa(400, "erro: response_format nao suportado por este modelo"),
+        _RespostaFalsa(400, "erro: response_format nao suportado por este modelo outra vez"),
+    ]
+    monkeypatch.setattr(extractor.httpx, "Client", _ClienteFalso)
+
+    extrator = LLMExtractor(api_key="chave-de-teste-sem-valor")
+    with pytest.raises(LLMError) as exc:
+        extrator.extrair("https://acme.com.br", "Acme", "texto qualquer")
+
+    assert "400" in str(exc.value)
+    assert len(_ClienteFalso.corpos_recebidos) == 2
 
 def test_falha_dupla_devolve_briefing_de_falha_sem_vazar_excecao(monkeypatch):
     # WR-03: quando os dois extratores falham, o degrau 3 de
