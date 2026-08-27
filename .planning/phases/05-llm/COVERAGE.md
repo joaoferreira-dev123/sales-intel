@@ -69,3 +69,32 @@ degradacao silenciosa. **Residual invertido, muito menor:** quem tiver chave da 
 definir nenhuma das duas variaveis manda essa chave para o Groq e toma 401 — caso improvavel,
 porque nao existe chave da OpenAI neste projeto, e ainda visivel pelo `.env.example` e pela
 mensagem de degradacao que chega ao vendedor (D-06/D-07).
+
+## Matriz legivel por maquina
+
+<!-- Codificacao das duas tabelas acima no formato canonico do gate
+     api-coverage. As tabelas em portugues seguem sendo a fonte de
+     leitura humana; este bloco existe so para o parser. -->
+
+```coverage
+[
+  {"capability": "POST /chat/completions", "decision": "INTEGRATE", "reason": "uma chamada por URL, sincrona (LLMExtractor._chamar_provedor)"},
+  {"capability": "Endereco base do endpoint (LLM_BASE_URL)", "decision": "INTEGRATE", "reason": "padrao e valor em uso sao o mesmo endpoint do Groq (D-13 invertida)"},
+  {"capability": "model (LLM_MODELO)", "decision": "INTEGRATE", "reason": "padrao openai/gpt-oss-120b, divergindo da SPEC 13 de proposito (D-13 invertida, D-14)"},
+  {"capability": "messages (papeis system + user)", "decision": "INTEGRATE", "reason": "instrucao e dado em mensagens separadas (D-11)"},
+  {"capability": "response_format: json_schema (structured_outputs)", "decision": "INTEGRATE", "reason": "caminho primario de D-02, verificado contra modelo real; capacidade pela qual gpt-oss-120b foi escolhido (D-14)"},
+  {"capability": "response_format ausente (JSON pedido no prompt)", "decision": "INTEGRATE", "reason": "galho de degradacao de D-02, disparado por HTTP 400; coberto so por teste com duplo (D-14)"},
+  {"capability": "temperature", "decision": "INTEGRATE", "reason": "fixada em 0, para reduzir variacao entre execucoes"},
+  {"capability": "Authorization: Bearer", "decision": "INTEGRATE", "reason": "unica forma de autenticacao; chave so por variavel de ambiente (SPEC 6)"},
+
+  {"capability": "strict: true no json_schema", "decision": "OPT-OUT", "reason": "exigiria additionalProperties false e todos os campos em required, que Briefing.model_json_schema() nao produz; a garantia real e Briefing(**dados) na volta (D-02, L-03)"},
+  {"capability": "stream: true", "decision": "OPT-OUT", "reason": "a UI mostra o cartao pronto, nao token a token; streaming nao encurta o tempo ate o vendedor poder ler"},
+  {"capability": "tools / function calling", "decision": "OPT-OUT", "reason": "o modelo nao recebe nenhuma ferramenta de proposito, o que reduz a superficie de injecao de prompt (D-11, ameaca T-05-29)"},
+  {"capability": "Retry / backoff do provedor", "decision": "OPT-OUT", "reason": "D-03: sem retry; o fallback heuristico ja e a estrategia de recuperacao"},
+  {"capability": "Batch API / requisicoes assincronas", "decision": "OPT-OUT", "reason": "o vendedor espera segundos, nao minutos; o fluxo e sincrono por desenho (SPEC 3)"},
+  {"capability": "Embeddings, moderacao, arquivos, assistentes", "decision": "OPT-OUT", "reason": "fora do escopo do produto (SPEC 4)"},
+  {"capability": "max_tokens, top_p, seed, penalidades", "decision": "OPT-OUT", "reason": "knob sem retorno de demonstracao; o controle de custo que importa e o corte de entrada de L-04"},
+  {"capability": "SDK oficial do provedor", "decision": "OPT-OUT", "reason": "D-01: httpx direto evita pacote novo antes da demo e serve qualquer endpoint compativel (L-06); confirmado na pratica quando o provedor virou Groq"},
+  {"capability": "json_mode (response_format type json_object)", "decision": "OPT-OUT", "reason": "os outros modelos grandes da conta so oferecem isto; gpt-oss-120b foi escolhido justamente para usar structured_outputs (D-14)"}
+]
+```
