@@ -32,11 +32,11 @@ source .venv/bin/activate
 
 pip install -r requirements.txt
 
-cp .env.example .env      # e preencha LLM_API_KEY
+cp .env.example .env      # preencha LLM_API_KEY, ADMIN_USERNAME e ADMIN_SENHA
 uvicorn app.main:app
 ```
 
-Abra `http://127.0.0.1:8000`.
+Abra `http://127.0.0.1:8000` e entre com o usuário e a senha definidos em `ADMIN_USERNAME` / `ADMIN_SENHA`.
 
 **Sem chave de API o sistema roda igual**, usando o extrator por regras em vez do LLM. O briefing sai mais pobre e a resposta vem marcada como degradada, mas nada quebra.
 
@@ -74,12 +74,18 @@ POST /api/briefings
 
 ### Rotas
 
-| Rota | O que faz |
-|---|---|
-| `GET /` | A interface do vendedor |
-| `POST /api/briefings` | Recebe até 10 URLs, devolve um briefing por URL |
-| `GET /api/historico` | Briefings já gerados |
-| `GET /health` | Saúde do serviço e qual extrator está ativo |
+| Rota | Quem acessa | O que faz |
+|---|---|---|
+| `GET /` | público | A interface: tela de login ou painel, conforme a sessão |
+| `GET /health` | público | Saúde do serviço e qual extrator está ativo |
+| `POST /api/auth/login` | público | Autentica e cria a sessão |
+| `POST /api/auth/logout` | autenticado | Encerra a sessão |
+| `GET /api/auth/me` | autenticado | Quem está logado e qual o papel |
+| `POST /api/briefings` | autenticado | Recebe até 10 URLs, devolve um briefing por URL |
+| `GET /api/historico` | autenticado | Briefings gerados. Vendedor vê os seus, admin vê todos |
+| `GET /api/admin/usuarios` | admin | Lista de usuários |
+| `POST /api/admin/usuarios` | admin | Cria usuário |
+| `POST /api/admin/usuarios/{id}/ativo` | admin | Ativa ou desativa usuário |
 
 ---
 
@@ -124,6 +130,24 @@ A alternativa, deixar o endpoint apontando para um provedor e o modelo para outr
 `robots.txt` é consultado antes de buscar, com timeout próprio e curto. O user-agent é identificável e traz contato. Existe limite de tamanho de página e validação de URL que rejeita endereços privados, loopback e reservados, revalidando a cada redirecionamento.
 
 Essa última parte fecha o ataque mais óbvio contra um sistema que busca URLs enviadas pelo usuário: usar o servidor como ponte para alcançar a rede interna.
+
+### Autorização vive no servidor
+
+A interface esconde a área de administração de quem não é admin, e isso é conforto de uso, não controle de acesso. O HTML é o mesmo arquivo para todo mundo, então a seção existe no código-fonte da página.
+
+O que controla é o servidor: cada rota declara sua guarda e o papel é lido da sessão gravada no banco, nunca de algo que o cliente envie. Forçar a seção a aparecer pelo inspetor do navegador não dá acesso a nada, as chamadas voltam 403.
+
+Existe um teste que percorre todas as rotas registradas e compara com a lista declarada de guardas, exigindo igualdade entre os conjuntos. Rota nova sem guarda declarada quebra a suíte em vez de nascer aberta.
+
+### Senhas e sessões
+
+Senha guardada com scrypt, da biblioteca padrão do Python, com sal por usuário. A comparação usa tempo constante.
+
+A sessão é um token opaco, guardado no banco apenas como resumo criptográfico, então vazar o banco não entrega sessões utilizáveis. Desativar um usuário encerra a sessão em curso, não só bloqueia logins futuros.
+
+O primeiro administrador nasce de variáveis de ambiente na inicialização, sem cadastro público e sem senha embutida no código. A criação é idempotente: se o usuário já existe, nada é sobrescrito.
+
+O login tem duas contagens de limite: por IP e por nome de usuário. E erro de login devolve sempre a mesma mensagem, seja usuário inexistente ou senha errada, para não entregar quais contas existem.
 
 ---
 
