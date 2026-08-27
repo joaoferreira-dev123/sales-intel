@@ -146,18 +146,37 @@ Esse é o ponto mais forte da apresentação. Ele demonstra decisão de arquitet
 | `extrator` | texto | `llm`, `heuristico` ou `falha` |
 | `conteudo_hash` | texto | Hash do texto extraído, detecta mudança de página |
 | `coletado_em` | timestamp | Base para calcular validade |
+| `owner` | texto, nulo | id do usuário que gerou o briefing (Fase 6); nulo em linha anterior à Fase 6 |
 
 Validade padrão do cache: 7 dias. Passado isso, considera desatualizado e raspa de novo.
 
-### Tabela `usuarios` (só se o bônus 2 entrar)
+**Política de leitura de `owner` (D-18).** O filtro de visibilidade vive na leitura, não numa migração: vendedor vê apenas as próprias linhas, admin vê todas, e linha sem dono (anterior à Fase 6) é visível apenas para admin. Nenhuma migração reescreve ou remove linha existente.
+
+**`conteudo_hash` especificado e não implementado.** A coluna está na tabela desde a Fase 0, mas nenhum código grava ou lê valor nela — risco aceito R-10 da Fase 5 (`05-SECURITY.md`), que adiou a revalidação de conteúdo em cache. Um leitor novo desta seção pode supor, pela presença da coluna, que ela é usada; não é.
+
+### Tabela `usuarios`
 
 | Coluna | Tipo |
 |---|---|
 | `id` | uuid |
 | `username` | texto, único |
-| `senha_hash` | texto (argon2) |
+| `senha_hash` | texto, formato autodescritivo `scrypt$n$r$p$salt$chave` (`n`, `r`, `p` em texto puro; `salt` e `chave` derivada em base64) |
 | `papel` | `vendedor` ou `admin` |
 | `ativo` | booleano |
+| `criado_em` | timestamp |
+
+**Divergência registrada (D-15).** A versão anterior deste documento definia `senha_hash` como `texto (argon2)`. A decisão travada D-15 escolheu `hashlib.scrypt` da biblioteca padrão em vez de argon2: `argon2-cffi` é pacote novo com extensão C compilada, e L-06 proíbe instalar dependência nova antes da entrega. Os parâmetros de custo (`n`, `r`, `p`) ficam gravados dentro da própria string de hash, para que um aumento futuro de custo não invalide hash já gravado. A comparação na verificação é feita em tempo constante (`hmac.compare_digest`), nunca com `==`.
+
+### Tabela `sessoes`
+
+| Coluna | Tipo |
+|---|---|
+| `token_hash` | texto, chave primária |
+| `usuario_id` | texto |
+| `criada_em` | timestamp |
+| `expira_em` | timestamp |
+
+**Sessão (D-16).** `token_hash` é o sha256 do token de sessão; o token bruto vive apenas no cookie do navegador, nunca no banco. Sessão é token opaco de 32 bytes gerado por CSPRNG (`secrets.token_urlsafe`), não JWT nem cookie assinado à mão. Revogação é remoção de linha. Duração de 12 horas.
 
 ## 9. Schema do Briefing
 
@@ -257,7 +276,11 @@ CACHE_VALIDADE_DIAS=7
 FETCH_TIMEOUT=15
 USER_AGENT=bna-sales-intel/0.1 (+contato: gabriel@bna.dev.br)
 DEBUG=false
+ADMIN_USERNAME=
+ADMIN_SENHA=
 ```
+
+As duas variáveis acima semeiam o primeiro administrador na subida do processo (D-19): não existe cadastro público, e o sistema nunca traz credencial embutida no código — sem as duas, nenhum administrador é criado.
 
 ## 14. Testes
 
