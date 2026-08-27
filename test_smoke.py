@@ -1084,3 +1084,39 @@ def test_vendedor_logado_recebe_apenas_o_proprio_historico_pela_api(monkeypatch,
     assert resp_dois.status_code == 200
     assert [linha["url"] for linha in resp_dois.json()] == ["https://dois.com.br"]
 
+
+def test_front_consome_as_rotas_de_administracao():
+    conteudo = Path("static/index.html").read_text(encoding="utf-8")
+    assert "/api/admin/usuarios" in conteudo
+    assert "/ativo" in conteudo
+    assert "carregarUsuarios" in conteudo
+
+
+# T-06-48: o clique na lista de usuarios e tratado por delegacao no script,
+# nunca por um atributo de evento embutido na marcacao (contexto de
+# execucao de script dentro de atributo).
+def test_front_nao_usa_manipulador_embutido_na_marcacao():
+    conteudo = Path("static/index.html").read_text(encoding="utf-8")
+    marcacao = conteudo.split("<script>")[0]
+    assert re.search(r"\son[a-z]+=", marcacao) is None
+
+
+# D-17/L-07: criterio de fechamento da fase (SPEC S15). Esconder a area de
+# admin na tela e conforto de uso; quem decide de verdade e o servidor —
+# aqui provado chamando as tres rotas de administracao direto pela API,
+# com sessao de vendedor, sem nenhum navegador envolvido.
+def test_area_de_admin_escondida_nao_e_o_controle_de_acesso(monkeypatch, tmp_path):
+    client = _cliente_autenticado(monkeypatch, tmp_path, papel="vendedor")
+
+    resp_listar = client.get("/api/admin/usuarios")
+    assert resp_listar.status_code == 403
+
+    resp_criar = client.post(
+        "/api/admin/usuarios",
+        json={"username": "novato", "senha": NOVO_USUARIO_SENHA, "papel": "vendedor"},
+    )
+    assert resp_criar.status_code == 403
+
+    resp_ativo = client.post("/api/admin/usuarios/algum-id/ativo", json={"ativo": False})
+    assert resp_ativo.status_code == 403
+

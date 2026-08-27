@@ -77,6 +77,34 @@
     </div>
     <div id="historico-lista"></div>
   </div>
+
+  <div class="card" id="admin" hidden>
+    <!-- L-07: esconder esta secao para quem nao e admin e conforto de uso,
+         nao controle de acesso — o servidor recusa o vendedor com 403 nas
+         tres rotas abaixo mesmo que a secao seja forcada a aparecer pelo
+         inspetor (teste de fechamento em test_smoke.py, SPEC §15). -->
+    <h2>Administração</h2>
+    <div class="row">
+      <button id="btn-usuarios">Atualizar lista</button>
+      <span id="admin-status" class="meta"></span>
+    </div>
+    <div id="lista-usuarios"></div>
+
+    <h2>Novo usuário</h2>
+    <label for="novo-usuario-username">Usuário</label>
+    <input type="text" id="novo-usuario-username" placeholder="usuario" autocomplete="off">
+    <label for="novo-usuario-senha">Senha</label>
+    <input type="password" id="novo-usuario-senha" placeholder="senha" autocomplete="new-password">
+    <label for="novo-usuario-papel">Papel</label>
+    <select id="novo-usuario-papel">
+      <option value="vendedor">vendedor</option>
+      <option value="admin">admin</option>
+    </select>
+    <div class="row">
+      <button id="btn-criar-usuario">Criar usuário</button>
+      <span id="criar-usuario-status" class="meta"></span>
+    </div>
+  </div>
 </main>
 
 <script>
@@ -103,7 +131,102 @@ const btnHistorico = document.getElementById('btn-historico');
 const historicoStatus = document.getElementById('historico-status');
 const historicoLista = document.getElementById('historico-lista');
 
+const admin = document.getElementById('admin');
+const btnUsuarios = document.getElementById('btn-usuarios');
+const adminStatus = document.getElementById('admin-status');
+const listaUsuarios = document.getElementById('lista-usuarios');
+const btnCriarUsuario = document.getElementById('btn-criar-usuario');
+const criarUsuarioStatus = document.getElementById('criar-usuario-status');
+
 let usuarioLogado = null;
+
+async function carregarUsuarios() {
+  btnUsuarios.disabled = true;
+  adminStatus.textContent = 'Carregando...';
+  try {
+    const resp = await fetch('/api/admin/usuarios');
+    if (!resp.ok) throw new Error('Erro ' + resp.status);
+    const usuarios = await resp.json();
+    adminStatus.textContent = usuarios.length + ' usuario(s)';
+    listaUsuarios.innerHTML = usuarios.map(renderUsuario).join('');
+  } catch (e) {
+    adminStatus.textContent = 'Falhou: ' + escapar(e.message);
+  } finally {
+    btnUsuarios.disabled = false;
+  }
+}
+
+function renderUsuario(u) {
+  return `<div class="row">
+    <span>${escapar(u.username)}</span>
+    <span class="tag">${escapar(u.papel)}</span>
+    <span class="tag">${u.ativo ? 'ativo' : 'inativo'}</span>
+    <button class="btn-alternar-ativo" data-id="${escapar(u.id)}" data-ativo="${u.ativo}">${u.ativo ? 'Desativar' : 'Ativar'}</button>
+  </div>`;
+}
+
+btnUsuarios.onclick = carregarUsuarios;
+
+// Clique tratado por delegacao a partir do contenedor: nenhum manipulador
+// de evento embutido na marcacao (T-06-48).
+listaUsuarios.addEventListener('click', async (ev) => {
+  const alvo = ev.target.closest('.btn-alternar-ativo');
+  if (!alvo) return;
+  const id = alvo.dataset.id;
+  const ativoAtual = alvo.dataset.ativo === 'true';
+
+  alvo.disabled = true;
+  try {
+    const resp = await fetch('/api/admin/usuarios/' + encodeURIComponent(id) + '/ativo', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ativo: !ativoAtual })
+    });
+    if (!resp.ok) {
+      const corpo = await resp.json().catch(() => ({}));
+      adminStatus.textContent = escapar(corpo.detail || ('Erro ' + resp.status));
+      return;
+    }
+    await carregarUsuarios();
+  } catch (e) {
+    adminStatus.textContent = 'Falhou: ' + escapar(e.message);
+  } finally {
+    alvo.disabled = false;
+  }
+});
+
+btnCriarUsuario.onclick = async () => {
+  const username = document.getElementById('novo-usuario-username').value.trim();
+  const senha = document.getElementById('novo-usuario-senha').value;
+  const papel = document.getElementById('novo-usuario-papel').value;
+
+  btnCriarUsuario.disabled = true;
+  criarUsuarioStatus.textContent = 'Criando...';
+  try {
+    const resp = await fetch('/api/admin/usuarios', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, senha, papel })
+    });
+    if (resp.status === 422) {
+      criarUsuarioStatus.textContent = 'Usuario (min. 3) e senha (min. 12) nao atendem os requisitos.';
+      return;
+    }
+    if (!resp.ok) {
+      const corpo = await resp.json().catch(() => ({}));
+      criarUsuarioStatus.textContent = escapar(corpo.detail || ('Erro ' + resp.status));
+      return;
+    }
+    document.getElementById('novo-usuario-username').value = '';
+    document.getElementById('novo-usuario-senha').value = '';
+    criarUsuarioStatus.textContent = '';
+    await carregarUsuarios();
+  } catch (e) {
+    criarUsuarioStatus.textContent = 'Falhou: ' + escapar(e.message);
+  } finally {
+    btnCriarUsuario.disabled = false;
+  }
+};
 
 async function carregarHistorico() {
   btnHistorico.disabled = true;
@@ -150,12 +273,19 @@ async function carregarSessao() {
       secaoApp.hidden = false;
       cabecalhoUsuario.hidden = false;
       nomeUsuarioLogado.textContent = escapar(usuarioLogado.username);
+      // L-07: exibir a secao de admin aqui e conveniencia — o servidor
+      // continua sendo quem decide (exigir_admin nas tres rotas).
+      admin.hidden = usuarioLogado.papel !== 'admin';
+      if (usuarioLogado.papel === 'admin') {
+        await carregarUsuarios();
+      }
       await carregarHistorico();
     } else if (resp.status === 401) {
       usuarioLogado = null;
       secaoApp.hidden = true;
       cabecalhoUsuario.hidden = true;
       secaoLogin.hidden = false;
+      admin.hidden = true;
     } else {
       loginStatus.textContent = 'Nao foi possivel verificar a sessao (' + resp.status + ').';
     }
