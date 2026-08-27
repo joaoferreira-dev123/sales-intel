@@ -110,31 +110,47 @@ def buscar_html(url: str) -> str:
             headers={"User-Agent": USER_AGENT},
         ) as client:
             redirecionamentos = 0
-            resp = client.get(url)
-            while resp.is_redirect:
-                redirecionamentos += 1
-                if redirecionamentos > MAX_REDIRECTS:
-                    raise FetchError("Excesso de redirecionamentos.")
-                destino = resp.headers.get("location")
-                if not destino:
-                    raise FetchError("Redirecionamento sem destino valido.")
-                url = str(httpx.URL(url).join(destino))
-                _validar_url_publica(url)
-                resp = client.get(url)
-            resp.raise_for_status()
+            while True:
+                with client.stream("GET", url) as resp:
+                    if resp.is_redirect:
+                        redirecionamentos += 1
+                        if redirecionamentos > MAX_REDIRECTS:
+                            raise FetchError("Excesso de redirecionamentos.")
+                        destino = resp.headers.get("location")
+                        if not destino:
+                            raise FetchError("Redirecionamento sem destino valido.")
+                        url = str(httpx.URL(url).join(destino))
+                        _validar_url_publica(url)
+                        continue
+
+                    resp.raise_for_status()
+
+                    tipo = resp.headers.get("content-type", "")
+                    if "html" not in tipo.lower():
+                        raise FetchError(
+                            f"O endereco nao devolveu HTML (veio {tipo or 'sem tipo'})."
+                        )
+
+                    # WR-01: cap aplicado durante o download, nao depois —
+                    # senao um servidor malicioso (trivial de alcancar dado
+                    # CR-01: sem autenticacao no endpoint) forca o processo
+                    # a bufferizar um corpo arbitrariamente grande antes do
+                    # limite ser checado. httpx nao limita o tamanho do
+                    # corpo em .get()/.stream() sozinho.
+                    total = 0
+                    partes: list[bytes] = []
+                    for chunk in resp.iter_bytes():
+                        total += len(chunk)
+                        if total > MAX_BYTES:
+                            raise FetchError("Pagina grande demais.")
+                        partes.append(chunk)
+
+                    encoding = resp.charset_encoding or "utf-8"
+                    return b"".join(partes).decode(encoding, errors="replace")
     except httpx.HTTPStatusError as e:
         raise FetchError(f"O site respondeu {e.response.status_code}.") from e
     except httpx.RequestError as e:
         raise FetchError(f"Nao consegui alcancar o site: {type(e).__name__}") from e
-
-    tipo = resp.headers.get("content-type", "")
-    if "html" not in tipo:
-        raise FetchError(f"O endereco nao devolveu HTML (veio {tipo or 'sem tipo'}).")
-
-    if len(resp.content) > MAX_BYTES:
-        raise FetchError("Pagina grande demais.")
-
-    return resp.text
 
 
 def extrair_texto(html: str) -> tuple[str, str]:
