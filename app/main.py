@@ -13,6 +13,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import ValidationError
 
 from . import config, db
 from .extractor import HeuristicExtractor, LLMError, escolher_extrator
@@ -114,17 +115,28 @@ def gerar_briefings(req: BriefingRequest) -> list[BriefingResponse]:
                 # que os tres nunca discordem sobre o modo de operacao (D-09).
                 cache = db.buscar(url, llm_disponivel=bool(config.llm_api_key()))
                 if cache is not None:
-                    dados, nome_extrator, coletado_em = cache
-                    resultados.append(
-                        BriefingResponse(
+                    # L-02/D-10: uma linha gravada por uma versao anterior do
+                    # schema e dado velho, nao erro do usuario — o tratamento
+                    # correto e recoletar, nunca corrigir ou apagar a linha.
+                    # Captura estreita (nao Exception largo): mantem a
+                    # distincao entre "linha velha, recolete" e "erro
+                    # inesperado, degrade a URL" (o catch-all abaixo continua
+                    # sendo a rede embaixo).
+                    resposta_cache = None
+                    try:
+                        dados, nome_extrator, coletado_em = cache
+                        resposta_cache = BriefingResponse(
                             url=url,
                             briefing=Briefing(**dados),
                             origem="cache",
                             extrator=nome_extrator,
                             coletado_em=coletado_em,
                         )
-                    )
-                    continue
+                    except (ValidationError, TypeError):
+                        pass
+                    if resposta_cache is not None:
+                        resultados.append(resposta_cache)
+                        continue
 
             html = buscar_html(url)
             titulo, texto = extrair_texto(html)
