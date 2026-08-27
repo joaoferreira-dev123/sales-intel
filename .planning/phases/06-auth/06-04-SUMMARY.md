@@ -226,3 +226,17 @@ None - no external service configuration required. `ADMIN_USERNAME`/`ADMIN_SENHA
 ---
 *Phase: 06-auth*
 *Completed: 2026-08-27*
+
+## Self-Check: PASSED
+
+- FOUND: `app/config.py`
+- FOUND: `app/auth.py`
+- FOUND: `app/schemas.py`
+- FOUND: `app/main.py`
+- FOUND: `test_smoke.py`
+- FOUND: `.env.example`
+- FOUND: `.planning/phases/06-auth/06-04-SUMMARY.md`
+- FOUND commit: `b646aa9`
+- FOUND commit: `fdcb6af`
+- FOUND commit: `52552a5`
+- FOUND commit: `a233f42`
