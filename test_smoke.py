@@ -133,3 +133,34 @@ def test_falha_ao_salvar_no_cache_nao_derruba_o_lote(monkeypatch):
     assert item_quebrada["briefing"]["empresa"] == "Acme Tecnologia"
     assert item_quebrada["degradado"] == main.AVISO_CACHE_INDISPONIVEL
 
+def test_cache_incompativel_com_o_schema_vira_miss(monkeypatch):
+    # L-02: uma linha gravada por uma versao anterior do schema (aqui, sem o
+    # campo obrigatorio "empresa") e dado velho, nao erro do usuario. O
+    # tratamento correto e recoletar, nunca propagar ValidationError.
+    monkeypatch.delenv("LLM_API_KEY", raising=False)
+
+    linha_velha = (
+        {"resumo": "texto antigo gravado por um schema anterior"},
+        "llm",
+        datetime.now(timezone.utc),
+    )
+    monkeypatch.setattr(db, "buscar", lambda *args, **kwargs: linha_velha)
+    monkeypatch.setattr(main, "buscar_html", lambda url: HTML)
+    monkeypatch.setattr(db, "salvar", lambda *args, **kwargs: datetime.now(timezone.utc))
+
+    # Sem "with": nao dispara o lifespan, entao nao chama db.criar_tabelas()
+    # nem cria o arquivo briefings.db.
+    client = TestClient(main.app)
+    resp = client.post(
+        "/api/briefings",
+        json={"urls": ["https://acme.com.br"]},
+    )
+
+    assert resp.status_code == 200
+    dados = resp.json()
+    assert len(dados) == 1
+    item = dados[0]
+    assert item["origem"] == "novo"
+    assert item["extrator"] == "heuristico"
+    assert item["briefing"]["empresa"] == "Acme Tecnologia"
+
