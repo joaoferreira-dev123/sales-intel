@@ -288,13 +288,20 @@ def _extrair_com_fallback(
     response_model=list[BriefingResponse],
     dependencies=[Depends(_checar_rate_limit)],
 )
-def gerar_briefings(req: BriefingRequest) -> list[BriefingResponse]:
+def gerar_briefings(
+    req: BriefingRequest, usuario: Usuario = Depends(usuario_atual)
+) -> list[BriefingResponse]:
     """
     Recebe de 1 a 10 links e devolve um briefing por link.
 
     Um link que falha nao derruba os outros: cada URL e tratada de forma
     independente e o erro vira um briefing de confianca baixa explicando
     o que aconteceu. O vendedor prefere resultado parcial a erro 500.
+
+    D-17/T-06-27: exige sessao (`usuario_atual`), alem do limite por IP
+    (`_checar_rate_limit`) — sao dois controles diferentes, e nenhum
+    substitui o outro. D-18: cada briefing gravado registra o dono a
+    partir da sessao, nunca de um campo do corpo da requisicao.
     """
     resultados: list[BriefingResponse] = []
 
@@ -341,7 +348,9 @@ def gerar_briefings(req: BriefingRequest) -> list[BriefingResponse]:
                 coletado_em = datetime.now(timezone.utc)
             else:
                 try:
-                    coletado_em = db.salvar(url, briefing.model_dump(), nome_extrator)
+                    coletado_em = db.salvar(
+                        url, briefing.model_dump(), nome_extrator, dono=usuario.id
+                    )
                 except Exception:
                     # L-02: falha de gravacao no cache e falha de otimizacao, nao
                     # motivo para descartar um briefing ja gerado com sucesso.
@@ -395,9 +404,14 @@ def gerar_briefings(req: BriefingRequest) -> list[BriefingResponse]:
 
 
 @app.get("/api/historico")
-def historico(limite: int = 50) -> list[dict]:
-    """Tela de admin: o que ja foi coletado."""
-    return db.listar(limite)
+def historico(limite: int = 50, usuario: Usuario = Depends(usuario_atual)) -> list[dict]:
+    """O que ja foi coletado. D-18: o recorte de visibilidade vem da
+    sessao, nunca de um parametro de consulta — admin ve tudo, qualquer
+    outro papel ve so o que ele proprio gerou. Um dono forjado na URL
+    nao alcancaria nada, porque a rota nao aceita esse parametro (IDOR)."""
+    if usuario.papel == "admin":
+        return db.listar(limite, ver_tudo=True)
+    return db.listar(limite, dono=usuario.id)
 
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")

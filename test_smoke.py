@@ -53,7 +53,7 @@ def test_escolher_extrator_com_chave_devolve_llm(monkeypatch):
     monkeypatch.setenv("LLM_API_KEY", "chave-de-teste-sem-valor")
     assert isinstance(escolher_extrator(), LLMExtractor)
 
-def test_extrator_que_falha_nao_derruba_a_requisicao(monkeypatch):
+def test_extrator_que_falha_nao_derruba_a_requisicao(monkeypatch, tmp_path):
     class ExtratorQuebrado:
         nome = "llm"
 
@@ -65,9 +65,8 @@ def test_extrator_que_falha_nao_derruba_a_requisicao(monkeypatch):
     monkeypatch.setattr(db, "salvar", lambda *args, **kwargs: datetime.now(timezone.utc))
     monkeypatch.setattr(db, "buscar", lambda *args, **kwargs: None)
 
-    # Sem "with": nao dispara o lifespan, entao nao chama db.criar_tabelas()
-    # nem cria o arquivo briefings.db.
-    client = TestClient(main.app)
+    # Fase 6 (D-17): a rota agora exige sessao.
+    client = _cliente_autenticado(monkeypatch, tmp_path)
     resp = client.post(
         "/api/briefings",
         json={"urls": ["https://acme.com.br"], "forcar_atualizacao": True},
@@ -95,13 +94,13 @@ def test_llm_sem_chave_levanta_erro_claro(monkeypatch):
     assert "chave" in str(exc.value).lower()
     assert "None" not in str(exc.value) and "NoneType" not in str(exc.value)
 
-def test_falha_ao_salvar_no_cache_nao_derruba_o_lote(monkeypatch):
+def test_falha_ao_salvar_no_cache_nao_derruba_o_lote(monkeypatch, tmp_path):
     # L-02: falha de gravacao no cache e falha de otimizacao, nao motivo para
     # descartar um briefing ja gerado com sucesso, nem para derrubar outras
     # URLs do mesmo lote que ja tinham sido processadas.
     monkeypatch.delenv("LLM_API_KEY", raising=False)
 
-    def salvar_com_falha_seletiva(url, briefing, extrator):
+    def salvar_com_falha_seletiva(url, briefing, extrator, dono=None):
         if "quebra" in url:
             raise RuntimeError("disco cheio")
         return datetime.now(timezone.utc)
@@ -110,9 +109,8 @@ def test_falha_ao_salvar_no_cache_nao_derruba_o_lote(monkeypatch):
     monkeypatch.setattr(db, "buscar", lambda *args, **kwargs: None)
     monkeypatch.setattr(db, "salvar", salvar_com_falha_seletiva)
 
-    # Sem "with": nao dispara o lifespan, entao nao chama db.criar_tabelas()
-    # nem cria o arquivo briefings.db.
-    client = TestClient(main.app)
+    # Fase 6 (D-17): a rota agora exige sessao.
+    client = _cliente_autenticado(monkeypatch, tmp_path)
     resp = client.post(
         "/api/briefings",
         json={
@@ -141,7 +139,7 @@ def test_falha_ao_salvar_no_cache_nao_derruba_o_lote(monkeypatch):
     assert item_quebrada["briefing"]["empresa"] == "Acme Tecnologia"
     assert item_quebrada["degradado"] == main.AVISO_CACHE_INDISPONIVEL
 
-def test_cache_incompativel_com_o_schema_vira_miss(monkeypatch):
+def test_cache_incompativel_com_o_schema_vira_miss(monkeypatch, tmp_path):
     # L-02: uma linha gravada por uma versao anterior do schema (aqui, sem o
     # campo obrigatorio "empresa") e dado velho, nao erro do usuario. O
     # tratamento correto e recoletar, nunca propagar ValidationError.
@@ -156,9 +154,8 @@ def test_cache_incompativel_com_o_schema_vira_miss(monkeypatch):
     monkeypatch.setattr(main, "buscar_html", lambda url: HTML)
     monkeypatch.setattr(db, "salvar", lambda *args, **kwargs: datetime.now(timezone.utc))
 
-    # Sem "with": nao dispara o lifespan, entao nao chama db.criar_tabelas()
-    # nem cria o arquivo briefings.db.
-    client = TestClient(main.app)
+    # Fase 6 (D-17): a rota agora exige sessao.
+    client = _cliente_autenticado(monkeypatch, tmp_path)
     resp = client.post(
         "/api/briefings",
         json={"urls": ["https://acme.com.br"]},
@@ -172,7 +169,7 @@ def test_cache_incompativel_com_o_schema_vira_miss(monkeypatch):
     assert item["extrator"] == "heuristico"
     assert item["briefing"]["empresa"] == "Acme Tecnologia"
 
-def test_cache_com_extrator_fora_da_enumeracao_vira_miss(monkeypatch):
+def test_cache_com_extrator_fora_da_enumeracao_vira_miss(monkeypatch, tmp_path):
     # WR-01: uma linha de cache com extrator fora da enumeracao da SPEC S8
     # (aqui, "gpt-5-turbo", gravada por um refactor futuro) e dado velho, nao
     # erro do usuario. "gpt-5-turbo" nao e "heuristico" de proposito: a regra
@@ -190,9 +187,8 @@ def test_cache_com_extrator_fora_da_enumeracao_vira_miss(monkeypatch):
     monkeypatch.setattr(main, "buscar_html", lambda url: HTML)
     monkeypatch.setattr(db, "salvar", lambda *args, **kwargs: datetime.now(timezone.utc))
 
-    # Sem "with": nao dispara o lifespan, entao nao chama db.criar_tabelas()
-    # nem cria o arquivo briefings.db.
-    client = TestClient(main.app)
+    # Fase 6 (D-17): a rota agora exige sessao.
+    client = _cliente_autenticado(monkeypatch, tmp_path)
     resp = client.post(
         "/api/briefings",
         json={"urls": ["https://acme.com.br"]},
@@ -398,7 +394,7 @@ def test_segundo_400_de_json_schema_vira_llmerror(monkeypatch):
     assert "400" in str(exc.value)
     assert len(_ClienteFalso.corpos_recebidos) == 2
 
-def test_falha_dupla_devolve_briefing_de_falha_sem_vazar_excecao(monkeypatch):
+def test_falha_dupla_devolve_briefing_de_falha_sem_vazar_excecao(monkeypatch, tmp_path):
     # WR-03: quando os dois extratores falham, o degrau 3 de
     # _extrair_com_fallback nao pode interpolar str() da excecao do
     # heuristico no campo lido pelo vendedor — mesma regra do degrau 2.
@@ -426,9 +422,8 @@ def test_falha_dupla_devolve_briefing_de_falha_sem_vazar_excecao(monkeypatch):
         lambda *args, **kwargs: chamadas_salvar.append(args) or datetime.now(timezone.utc),
     )
 
-    # Sem "with": nao dispara o lifespan, entao nao chama db.criar_tabelas()
-    # nem cria o arquivo briefings.db.
-    client = TestClient(main.app)
+    # Fase 6 (D-17): a rota agora exige sessao.
+    client = _cliente_autenticado(monkeypatch, tmp_path)
     resp = client.post(
         "/api/briefings",
         json={"urls": ["https://acme.com.br"], "forcar_atualizacao": True},
@@ -488,6 +483,87 @@ def test_rota_de_admin_sem_cookie_devolve_401(monkeypatch, tmp_path):
     client = TestClient(main.app)
     resp = client.get("/api/admin/usuarios")
     assert resp.status_code == 401
+
+# D-17/L-07: fecha o aceite R-01 na rota de geracao de briefing.
+def test_briefings_sem_cookie_devolve_401(monkeypatch, tmp_path):
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "teste.db")
+    db.criar_tabelas()
+    main._requisicoes_por_ip.clear()
+    client = TestClient(main.app)
+    resp = client.post(
+        "/api/briefings",
+        json={"urls": ["https://acme.com.br"]},
+    )
+    assert resp.status_code == 401
+
+
+# D-17/L-07: fecha o aceite R-01 na rota de historico.
+def test_historico_sem_cookie_devolve_401(monkeypatch, tmp_path):
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "teste.db")
+    db.criar_tabelas()
+    main._requisicoes_por_ip.clear()
+    client = TestClient(main.app)
+    resp = client.get("/api/historico")
+    assert resp.status_code == 401
+
+
+# D-18: cada vendedor ve, no proprio historico, apenas o que ele proprio
+# gerou — nunca a linha do outro vendedor no mesmo banco.
+def test_vendedor_ve_apenas_o_proprio_historico(monkeypatch, tmp_path):
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "teste.db")
+    db.criar_tabelas()
+    auth.criar_usuario("vendedor_a", SENHA_DE_TESTE, "vendedor")
+    auth.criar_usuario("vendedor_b", SENHA_DE_TESTE, "vendedor")
+    usuario_a = auth.autenticar("vendedor_a", SENHA_DE_TESTE)
+    usuario_b = auth.autenticar("vendedor_b", SENHA_DE_TESTE)
+    db.salvar("https://a.com.br", {"empresa": "A", "resumo": "r"}, "heuristico", dono=usuario_a["id"])
+    db.salvar("https://b.com.br", {"empresa": "B", "resumo": "r"}, "heuristico", dono=usuario_b["id"])
+
+    main._requisicoes_por_ip.clear()
+    main._tentativas_login_por_ip.clear()
+    main._falhas_login_por_usuario.clear()
+    client_a = TestClient(main.app)
+    resp_login_a = client_a.post(
+        "/api/auth/login", json={"username": "vendedor_a", "senha": SENHA_DE_TESTE}
+    )
+    assert resp_login_a.status_code == 200
+    resp_a = client_a.get("/api/historico")
+    assert resp_a.status_code == 200
+    urls_a = [linha["url"] for linha in resp_a.json()]
+    assert urls_a == ["https://a.com.br"]
+
+    main._tentativas_login_por_ip.clear()
+    client_b = TestClient(main.app)
+    resp_login_b = client_b.post(
+        "/api/auth/login", json={"username": "vendedor_b", "senha": SENHA_DE_TESTE}
+    )
+    assert resp_login_b.status_code == 200
+    resp_b = client_b.get("/api/historico")
+    assert resp_b.status_code == 200
+    urls_b = [linha["url"] for linha in resp_b.json()]
+    assert urls_b == ["https://b.com.br"]
+
+
+# D-18: uma linha gravada antes da Fase 6 (sem dono) e a resposta honesta
+# de "o sistema nao sabe quem gerou" — visivel so para admin. Este e o
+# teste que trava a resolucao da pergunta em aberto 1 do CONTEXT.
+def test_linha_sem_dono_so_aparece_para_admin(monkeypatch, tmp_path):
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "teste.db")
+    db.criar_tabelas()
+    db.salvar("https://orfa.com.br", {"empresa": "Orfa", "resumo": "r"}, "heuristico")  # sem dono
+
+    client_vendedor = _cliente_autenticado(monkeypatch, tmp_path, papel="vendedor", username="vend")
+    resp_vendedor = client_vendedor.get("/api/historico")
+    assert resp_vendedor.status_code == 200
+    assert resp_vendedor.json() == []
+
+    main._tentativas_login_por_ip.clear()
+    client_admin = _cliente_autenticado(monkeypatch, tmp_path, papel="admin", username="admin")
+    resp_admin = client_admin.get("/api/historico")
+    assert resp_admin.status_code == 200
+    urls_admin = [linha["url"] for linha in resp_admin.json()]
+    assert urls_admin == ["https://orfa.com.br"]
+
 
 # D-15: usuario inexistente e senha errada produzem exatamente a mesma
 # resposta, para nao permitir enumeracao de username (T-06-01).
