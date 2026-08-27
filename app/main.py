@@ -30,6 +30,12 @@ app = FastAPI(
 BASE_DIR = Path(__file__).resolve().parent.parent
 STATIC_DIR = BASE_DIR / "static"
 
+# L-02/D-05/D-06: literais autorados por nos. Nunca interpolamos str() de uma
+# excecao nao autorada nestes campos — o vendedor le apenas a frase generica,
+# nunca o texto arbitrario de uma falha de terceiro (SQLite, heuristico, etc).
+AVISO_CACHE_INDISPONIVEL = "Briefing gerado, mas nao foi possivel gravar no cache."
+MSG_FALHA_GENERICA = "Nao foi possivel gerar o briefing para este link."
+
 
 @app.on_event("startup")
 def inicializar() -> None:
@@ -98,36 +104,67 @@ def gerar_briefings(req: BriefingRequest) -> list[BriefingResponse]:
     for url_obj in req.urls:
         url = str(url_obj)
 
-        if not req.forcar_atualizacao:
-            # Mesma fonte consultada por escolher_extrator() e por /health, para
-            # que os tres nunca discordem sobre o modo de operacao (D-09).
-            cache = db.buscar(url, llm_disponivel=bool(config.llm_api_key()))
-            if cache is not None:
-                dados, nome_extrator, coletado_em = cache
-                resultados.append(
-                    BriefingResponse(
-                        url=url,
-                        briefing=Briefing(**dados),
-                        origem="cache",
-                        extrator=nome_extrator,
-                        coletado_em=coletado_em,
-                    )
-                )
-                continue
-
+        # L-02: o try sobe para cobrir o corpo por URL inteiro (cache, fetch,
+        # extracao, gravacao). Nao e so as duas rotas que a verificacao
+        # reproduziu: e a garantia de que nenhuma excecao desta URL derruba as
+        # demais do mesmo lote.
         try:
+            if not req.forcar_atualizacao:
+                # Mesma fonte consultada por escolher_extrator() e por /health, para
+                # que os tres nunca discordem sobre o modo de operacao (D-09).
+                cache = db.buscar(url, llm_disponivel=bool(config.llm_api_key()))
+                if cache is not None:
+                    dados, nome_extrator, coletado_em = cache
+                    resultados.append(
+                        BriefingResponse(
+                            url=url,
+                            briefing=Briefing(**dados),
+                            origem="cache",
+                            extrator=nome_extrator,
+                            coletado_em=coletado_em,
+                        )
+                    )
+                    continue
+
             html = buscar_html(url)
             titulo, texto = extrair_texto(html)
             briefing, nome_extrator, degradado = _extrair_com_fallback(url, titulo, texto)
             if nome_extrator == "falha":
                 coletado_em = datetime.now(timezone.utc)
             else:
-                coletado_em = db.salvar(url, briefing.model_dump(), nome_extrator)
+                try:
+                    coletado_em = db.salvar(url, briefing.model_dump(), nome_extrator)
+                except Exception:
+                    # L-02: falha de gravacao no cache e falha de otimizacao, nao
+                    # motivo para descartar um briefing ja gerado com sucesso.
+                    # Nao interpolamos str() da excecao: uma falha de SQLite nao
+                    # e mensagem autorada por nos (D-06) — o vendedor le apenas
+                    # o aviso generico.
+                    coletado_em = datetime.now(timezone.utc)
+                    if degradado is None:
+                        degradado = AVISO_CACHE_INDISPONIVEL
+                    else:
+                        degradado = f"{degradado} {AVISO_CACHE_INDISPONIVEL}"[:200]
             origem = "novo"
         except FetchError as e:
             briefing = Briefing(
                 empresa=url,
                 resumo=f"Nao foi possivel coletar esta pagina. {e}",
+                confianca="baixa",
+            )
+            coletado_em = datetime.now(timezone.utc)
+            origem = "novo"
+            nome_extrator = "falha"
+            degradado = None
+        except Exception:
+            # L-02: garantia estrutural. Cobre a CLASSE de falhas fora do fetch
+            # e do extrator (gravacao, leitura de cache, desserializacao), nao
+            # so as duas rotas nomeadas pela verificacao — uma quarta rota nao
+            # deve poder reabrir este gap. Sem nome: nao ha nada seguro a fazer
+            # com a excecao num campo que o vendedor le (D-06).
+            briefing = Briefing(
+                empresa=url,
+                resumo=MSG_FALHA_GENERICA,
                 confianca="baixa",
             )
             coletado_em = datetime.now(timezone.utc)
