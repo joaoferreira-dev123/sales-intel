@@ -57,14 +57,29 @@ def buscar(url: str, llm_disponivel: bool = False) -> tuple[dict, str, datetime]
     if row is None:
         return None
 
-    coletado_em = datetime.fromisoformat(row["coletado_em"])
+    # WR-03: uma linha corrompida (data ou JSON ilegivel) e dado velho, nao
+    # erro do usuario — mesma politica de "linha ruim = cache miss, recolete"
+    # que ja vale para drift de schema (D-10) em app/main.py. Sem esta
+    # captura, `datetime.fromisoformat`/`json.loads` levantavam direto para
+    # o `except Exception` largo de main.py, que produzia um briefing
+    # "falha" terminal em vez de recoletar.
+    try:
+        coletado_em = datetime.fromisoformat(row["coletado_em"])
+    except ValueError:
+        return None
+
     if datetime.now(timezone.utc) - coletado_em > VALIDADE:
         return None  # existe, mas venceu
 
     if llm_disponivel and row["extrator"] == "heuristico":
         return None  # heuristico com LLM ligado: forca recoleta para subir a qualidade
 
-    return json.loads(row["briefing"]), row["extrator"], coletado_em
+    try:
+        briefing = json.loads(row["briefing"])
+    except json.JSONDecodeError:
+        return None
+
+    return briefing, row["extrator"], coletado_em
 
 
 def salvar(url: str, briefing: dict, extrator: str) -> datetime:
