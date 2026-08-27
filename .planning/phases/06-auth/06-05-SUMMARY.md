@@ -194,3 +194,14 @@ None - no external service configuration required. A UI consome rotas ja existen
 ---
 *Phase: 06-auth*
 *Completed: 2026-08-27*
+
+## Self-Check: PASSED
+
+- FOUND: `static/index.html`
+- FOUND: `test_smoke.py`
+- FOUND: `.planning/phases/06-auth/06-05-SUMMARY.md`
+- FOUND commit: `6f55d08`
+- FOUND commit: `aa90c63`
+- FOUND commit: `cf2281e`
+- FOUND commit: `9f04642`
+- `python -m pytest -q` — 54 passed, 0 failed
