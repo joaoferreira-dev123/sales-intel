@@ -885,3 +885,113 @@ def test_admin_nao_pode_desativar_a_si_mesmo(monkeypatch, tmp_path):
     usuario = auth.buscar_usuario_por_id(admin_id)
     assert usuario["ativo"] == 1
 
+
+# Fase 6 (D-17/L-07): inventario de rotas travado por teste. Acrescentar uma
+# rota sem acrescentar uma linha aqui e defeito — o teste abaixo quebra por
+# desenho quando isso acontece. Dez entradas, uma por rota decorada, na
+# mesma ordem da tabela de SPEC-sales-intel.md S10 escrita pelo plano
+# 06-02: saude, raiz, login, logout, me, briefings, historico, listagem de
+# usuarios, criacao de usuario e alteracao de atividade. O caminho de
+# estaticos (`/static/*`) e a decima primeira linha da S10, mas e mount, nao
+# rota decorada — conferido a parte, em `test_rotas_publicas_respondem_sem_cookie`.
+GUARDA_PUBLICA = "publico"
+GUARDA_AUTENTICADA = "autenticado"
+GUARDA_RESTRITA_ADMIN = "restrito_admin"
+
+GUARDAS_ESPERADAS = {
+    ("GET", "/health"): GUARDA_PUBLICA,
+    ("GET", "/"): GUARDA_PUBLICA,
+    ("POST", "/api/auth/login"): GUARDA_PUBLICA,
+    ("POST", "/api/auth/logout"): GUARDA_AUTENTICADA,
+    ("GET", "/api/auth/me"): GUARDA_AUTENTICADA,
+    ("POST", "/api/briefings"): GUARDA_AUTENTICADA,
+    ("GET", "/api/historico"): GUARDA_AUTENTICADA,
+    ("GET", "/api/admin/usuarios"): GUARDA_RESTRITA_ADMIN,
+    ("POST", "/api/admin/usuarios"): GUARDA_RESTRITA_ADMIN,
+    ("POST", "/api/admin/usuarios/{usuario_id}/ativo"): GUARDA_RESTRITA_ADMIN,
+}
+
+
+def _guardas_da_rota(rota) -> set:
+    """Percorre recursivamente o grafo de dependencias resolvido pelo
+    FastAPI e devolve o conjunto de nomes das funcoes de dependencia. A
+    recursao e necessaria porque `exigir_admin` se apoia sobre
+    `usuario_atual` — o nome da segunda so aparece um nivel abaixo."""
+    nomes = set()
+
+    def _percorrer(dependant) -> None:
+        for sub in getattr(dependant, "dependencies", []):
+            if sub.call is not None:
+                nomes.add(sub.call.__name__)
+            _percorrer(sub)
+
+    _percorrer(rota.dependant)
+    return nomes
+
+
+def test_inventario_de_rotas_declara_guarda_para_cada_rota():
+    # Rotas decoradas: hasattr(r, "dependant") exclui /docs, /redoc,
+    # /openapi.json (Route puro do Starlette, sem .dependant — o "known
+    # trap" deste plano) e exclui o mount de estaticos (Mount, tambem sem
+    # .dependant).
+    rotas_reais = {
+        (sorted(r.methods)[0], r.path): r
+        for r in main.app.routes
+        if hasattr(r, "dependant")
+    }
+
+    # Igualdade de conjuntos, nao inclusao: uma rota nova sem linha aqui
+    # quebra o teste.
+    assert set(rotas_reais.keys()) == set(GUARDAS_ESPERADAS.keys())
+
+    for chave, rota in rotas_reais.items():
+        guardas = _guardas_da_rota(rota)
+        rotulo = GUARDAS_ESPERADAS[chave]
+
+        if rotulo == GUARDA_AUTENTICADA:
+            assert "usuario_atual" in guardas, chave
+        elif rotulo == GUARDA_RESTRITA_ADMIN:
+            assert "exigir_admin" in guardas, chave
+            assert "usuario_atual" in guardas, chave
+        else:
+            assert "usuario_atual" not in guardas, chave
+            assert "exigir_admin" not in guardas, chave
+
+    # A guarda nova somou ao limite por IP ja existente, nao o substituiu.
+    guardas_briefings = _guardas_da_rota(rotas_reais[("POST", "/api/briefings")])
+    assert "_checar_rate_limit" in guardas_briefings
+    assert "usuario_atual" in guardas_briefings
+
+
+# RF13, renovacao do aceite R-08: /health e / continuam publicos.
+def test_rotas_publicas_respondem_sem_cookie():
+    client = TestClient(main.app)
+    resp_health = client.get("/health")
+    assert resp_health.status_code == 200
+    assert set(resp_health.json().keys()) == {"status", "llm_disponivel"}
+
+    resp_raiz = client.get("/")
+    assert resp_raiz.status_code == 200
+
+    # O mount de estaticos continua ativo.
+    from fastapi.staticfiles import StaticFiles
+
+    assert any(isinstance(getattr(r, "app", None), StaticFiles) for r in main.app.routes)
+
+
+# T-05-41 renovado com verificacao: nenhuma rota le ou grava configuracao do
+# processo, o que preserva o aceite R-11 apos esta fase criar o papel de
+# administrador.
+def test_nenhuma_rota_expoe_configuracao_do_processo():
+    for metodo, caminho in GUARDAS_ESPERADAS:
+        assert "config" not in caminho
+
+    corpo = "\n".join(
+        linha
+        for linha in open("app/main.py", encoding="utf-8").read().splitlines()
+        if not linha.strip().startswith("#")
+    )
+    assert "import os" not in corpo
+    assert "LLM_BASE_URL" not in corpo
+    assert "LLM_MODELO" not in corpo
+
