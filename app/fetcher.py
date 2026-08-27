@@ -6,6 +6,8 @@ Duas responsabilidades separadas de proposito:
   - extrair texto (puro, testavel sem internet)
 """
 
+import ipaddress
+import socket
 import urllib.robotparser
 from urllib.parse import urlparse
 
@@ -21,10 +23,47 @@ MAX_BYTES = 3_000_000  # 3 MB: pagina maior que isso quase sempre e lixo
 # Robots.txt e um arquivo minusculo e bloqueia o trabalho de verdade; esperar
 # 15s (TIMEOUT) por ele significaria ate 30s por URL no pior caso.
 ROBOTS_TIMEOUT = 5.0
+# CR-01: teto de redirecionamentos manuais. Cada hop e revalidado contra
+# endereco privado antes de ser seguido (ver _validar_url_publica).
+MAX_REDIRECTS = 5
 
 
 class FetchError(Exception):
     """Falha ao buscar a pagina. Guarda o motivo para mostrar ao vendedor."""
+
+
+def _host_e_publico(host: str) -> bool:
+    """CR-01: resolve o host e recusa qualquer endereco privado, loopback,
+    link-local (inclui o endereco de metadados de nuvem 169.254.169.254),
+    multicast ou reservado. Sem isso, qualquer chamador anonimo consegue
+    usar este servico como proxy SSRF contra a rede onde ele roda."""
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except socket.gaierror:
+        return False
+    if not infos:
+        return False
+    for *_resto, sockaddr in infos:
+        ip = ipaddress.ip_address(sockaddr[0])
+        if (
+            ip.is_private
+            or ip.is_loopback
+            or ip.is_link_local
+            or ip.is_multicast
+            or ip.is_reserved
+            or ip.is_unspecified
+        ):
+            return False
+    return True
+
+
+def _validar_url_publica(url: str) -> None:
+    """CR-01: levanta FetchError se o host da URL nao resolver para um
+    endereco publico. Chamada antes de qualquer conexao de saida (busca
+    principal, robots.txt e cada hop de redirecionamento)."""
+    host = urlparse(url).hostname
+    if not host or not _host_e_publico(host):
+        raise FetchError("Este endereco nao pode ser coletado.")
 
 
 def pode_raspar(url: str) -> bool:
@@ -37,7 +76,12 @@ def pode_raspar(url: str) -> bool:
         resp = httpx.get(
             robots_url,
             timeout=ROBOTS_TIMEOUT,
-            follow_redirects=True,
+            # CR-01: sem seguir redirecionamento — o host da URL original ja
+            # foi validado pelo chamador (buscar_html), mas um 3xx aqui
+            # poderia apontar para um host privado que nunca passou por essa
+            # validacao. Um robots.txt redirecionado e tratado como
+            # ilegivel (fail-open ja documentado abaixo).
+            follow_redirects=False,
             headers={"User-Agent": USER_AGENT},
         )
         if resp.status_code >= 400:
@@ -50,16 +94,33 @@ def pode_raspar(url: str) -> bool:
 
 def buscar_html(url: str) -> str:
     """Baixa o HTML da pagina. Levanta FetchError em qualquer problema."""
+    _validar_url_publica(url)
+
     if not pode_raspar(url):
         raise FetchError("O robots.txt do site nao permite acesso automatizado.")
 
     try:
         with httpx.Client(
             timeout=TIMEOUT,
-            follow_redirects=True,
+            # CR-01: redirecionamento automatico desligado de proposito —
+            # cada hop precisa ser revalidado contra endereco privado antes
+            # de ser seguido, senao um servidor publico poderia
+            # redirecionar para 169.254.169.254 ou para localhost.
+            follow_redirects=False,
             headers={"User-Agent": USER_AGENT},
         ) as client:
+            redirecionamentos = 0
             resp = client.get(url)
+            while resp.is_redirect:
+                redirecionamentos += 1
+                if redirecionamentos > MAX_REDIRECTS:
+                    raise FetchError("Excesso de redirecionamentos.")
+                destino = resp.headers.get("location")
+                if not destino:
+                    raise FetchError("Redirecionamento sem destino valido.")
+                url = str(httpx.URL(url).join(destino))
+                _validar_url_publica(url)
+                resp = client.get(url)
             resp.raise_for_status()
     except httpx.HTTPStatusError as e:
         raise FetchError(f"O site respondeu {e.response.status_code}.") from e
