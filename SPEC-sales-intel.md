@@ -217,8 +217,29 @@ Lista de briefings gerados, mais recentes primeiro.
 ### `GET /health`
 `{"status": "ok"}`
 
-### Rotas do bônus 2
-`POST /api/auth/login`, `GET /api/auth/me`, `GET /api/admin/usuarios`.
+### Inventário de rotas (Bônus 2)
+
+| Rota | Quem pode chamar | Guarda |
+|---|---|---|
+| `GET /health` | público | nenhuma; requisito funcional RF13, devolve apenas booleanos |
+| `GET /` | público | nenhuma; é a própria tela de login |
+| `GET /static/*` | público | nenhuma; ativos da UI, sem dado de negócio |
+| `POST /api/auth/login` | público | limite por IP e por username; única porta que aceita credencial |
+| `POST /api/auth/logout` | autenticado | `usuario_atual` |
+| `GET /api/auth/me` | autenticado | `usuario_atual` |
+| `POST /api/briefings` | autenticado | `usuario_atual` mais o limite por IP já existente |
+| `GET /api/historico` | autenticado | `usuario_atual`; vendedor vê apenas as próprias linhas, admin vê todas |
+| `GET /api/admin/usuarios` | somente admin | `exigir_admin` |
+| `POST /api/admin/usuarios` | somente admin | `exigir_admin` |
+| `POST /api/admin/usuarios/{usuario_id}/ativo` | somente admin | `exigir_admin` |
+
+**Erros de autorização.** 401 quando não há sessão válida; 403 quando há sessão mas o papel não basta. Dois estados distintos, ambos avaliados no servidor, ambos com mensagem autorada e genérica.
+
+**Regra de D-17 e L-07.** A autorização é avaliada no servidor a cada requisição, por dependência declarada na rota. Esconder um botão na interface não é controle de acesso. Uma rota nova sem linha nesta tabela é um defeito, e existe um teste de inventário (plano 06-04) que quebra quando isso acontece.
+
+**Por que `/health` continua público.** Requisito funcional RF13, devolve somente booleanos e nenhum dado de negócio; o risco aceito R-08 da Fase 5 fica renovado nesta fase, não revogado.
+
+**Configuração não entra pela interface.** Nenhuma rota lê ou grava variável de configuração do processo; a área de administração é apenas leitura sobre histórico e usuários, mais criação e ativação de usuário. Consequência declarada: o risco aceito R-11 da Fase 5 segue válido mesmo com a fronteira operador/usuário passando a existir, porque o administrador do produto não ganhou poder sobre a configuração do processo.
 
 ## 11. Estratégia de extração com LLM
 
