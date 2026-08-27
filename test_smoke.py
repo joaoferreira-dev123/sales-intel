@@ -164,3 +164,48 @@ def test_cache_incompativel_com_o_schema_vira_miss(monkeypatch):
     assert item["extrator"] == "heuristico"
     assert item["briefing"]["empresa"] == "Acme Tecnologia"
 
+def test_falha_dupla_devolve_briefing_de_falha_sem_vazar_excecao(monkeypatch):
+    # WR-03: quando os dois extratores falham, o degrau 3 de
+    # _extrair_com_fallback nao pode interpolar str() da excecao do
+    # heuristico no campo lido pelo vendedor — mesma regra do degrau 2.
+    monkeypatch.delenv("LLM_API_KEY", raising=False)
+
+    class ExtratorPrimarioQuebrado:
+        nome = "llm"
+
+        def extrair(self, url, titulo, texto):
+            raise RuntimeError("provedor fora do ar")
+
+    class HeuristicoQuebrado:
+        def extrair(self, url, titulo, texto):
+            raise RuntimeError("heuristico tambem quebrou, texto sensivel aqui")
+
+    chamadas_salvar = []
+
+    monkeypatch.setattr(main, "escolher_extrator", lambda: ExtratorPrimarioQuebrado())
+    monkeypatch.setattr(main, "HeuristicExtractor", HeuristicoQuebrado)
+    monkeypatch.setattr(main, "buscar_html", lambda url: HTML)
+    monkeypatch.setattr(db, "buscar", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        db,
+        "salvar",
+        lambda *args, **kwargs: chamadas_salvar.append(args) or datetime.now(timezone.utc),
+    )
+
+    # Sem "with": nao dispara o lifespan, entao nao chama db.criar_tabelas()
+    # nem cria o arquivo briefings.db.
+    client = TestClient(main.app)
+    resp = client.post(
+        "/api/briefings",
+        json={"urls": ["https://acme.com.br"], "forcar_atualizacao": True},
+    )
+
+    assert resp.status_code == 200
+    dados = resp.json()
+    item = dados[0]
+    assert item["extrator"] == "falha"
+    assert item["briefing"]["confianca"] == "baixa"
+    assert item["briefing"]["resumo"] == main.MSG_FALHA_GENERICA
+    assert item["degradado"] is None
+    assert chamadas_salvar == []
+
