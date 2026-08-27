@@ -157,3 +157,11 @@ None - no external service configuration required. Nenhum arquivo de codigo foi 
 ---
 *Phase: 06-auth*
 *Completed: 2026-08-27*
+
+## Self-Check: PASSED
+
+- FOUND: `SPEC-sales-intel.md`
+- FOUND: `.planning/phases/06-auth/06-02-SUMMARY.md`
+- FOUND commit: `df505bb`
+- FOUND commit: `6945a58`
+- FOUND commit: `5bc14d4`
