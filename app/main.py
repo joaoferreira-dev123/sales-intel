@@ -11,15 +11,15 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import Lock
 
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 
-from . import config, db
+from . import auth, config, db
 from .extractor import HeuristicExtractor, LLMError, escolher_extrator
 from .fetcher import FetchError, buscar_html, extrair_texto
-from .schemas import Briefing, BriefingRequest, BriefingResponse
+from .schemas import Briefing, BriefingRequest, BriefingResponse, LoginRequest, Usuario
 
 app = FastAPI(
     title="Sales Intel",
@@ -37,6 +37,8 @@ STATIC_DIR = BASE_DIR / "static"
 # nunca o texto arbitrario de uma falha de terceiro (SQLite, heuristico, etc).
 AVISO_CACHE_INDISPONIVEL = "Briefing gerado, mas nao foi possivel gravar no cache."
 MSG_FALHA_GENERICA = "Nao foi possivel gerar o briefing para este link."
+MSG_NAO_AUTENTICADO = "Sessao ausente ou expirada. Faca login."
+MSG_SEM_PERMISSAO = "Esta area e restrita a administradores."
 
 # WR-04: sem nenhum controle, qualquer chamador anonimo drena custo de LLM
 # ilimitado batendo em loop em /api/briefings (cada URL nao cacheada dispara
@@ -70,6 +72,29 @@ def _checar_rate_limit(request: Request) -> None:
         historico.append(agora)
 
 
+def usuario_atual(request: Request) -> Usuario:
+    """Dependency do FastAPI: le o cookie de sessao e devolve o usuario
+    autenticado. Sem cookie ou com sessao invalida levanta 401. Ligada as
+    rotas por `Depends(usuario_atual)` como parametro (nao em
+    `dependencies=[...]`, que descartaria o retorno) porque `exigir_admin`
+    e as proprias rotas precisam do usuario resolvido (D-17)."""
+    token = request.cookies.get(auth.NOME_COOKIE_SESSAO)
+    usuario = auth.validar_sessao(token) if token else None
+    if usuario is None:
+        raise HTTPException(status_code=401, detail=MSG_NAO_AUTENTICADO)
+    return Usuario(**usuario)
+
+
+def exigir_admin(usuario: Usuario = Depends(usuario_atual)) -> Usuario:
+    """Dependency composta sobre `usuario_atual`: levanta 403 quando o
+    papel do usuario autenticado nao e admin. E esta composicao que produz
+    401 (sem sessao) e 403 (sessao sem privilegio) como dois estados
+    distintos, ambos avaliados no servidor a cada requisicao (L-07, D-17)."""
+    if usuario.papel != "admin":
+        raise HTTPException(status_code=403, detail=MSG_SEM_PERMISSAO)
+    return usuario
+
+
 @app.on_event("startup")
 def inicializar() -> None:
     db.criar_tabelas()
@@ -80,6 +105,43 @@ def health() -> dict:
     # D-08: extensao aditiva ao contrato da SPEC SS10 — "status" continua
     # "ok", e o campo novo so informa o modo de operacao, sem expor a chave.
     return {"status": "ok", "llm_disponivel": bool(config.llm_api_key())}
+
+
+@app.post("/api/auth/login", response_model=Usuario)
+def login(dados: LoginRequest, request: Request, resposta: Response) -> Usuario:
+    """Autentica por username e senha. Nenhum caminho emite sessao antes da
+    autenticacao — e o que fecha fixacao de sessao (T-06-07)."""
+    usuario = auth.autenticar(dados.username, dados.senha)
+    if usuario is None:
+        raise HTTPException(status_code=401, detail=auth.MSG_LOGIN_INVALIDO)
+
+    # Login bem-sucedido sempre emite token novo e sobrescreve o cookie.
+    token = auth.criar_sessao(usuario["id"])
+    resposta.set_cookie(
+        key=auth.NOME_COOKIE_SESSAO,
+        value=token,
+        httponly=True,
+        samesite="lax",
+        path="/",
+        max_age=int(auth.DURACAO_SESSAO.total_seconds()),
+        # D-16: a demo roda em http local; um cookie secure em http
+        # simplesmente nao seria enviado. Liga sozinho quando o esquema da
+        # requisicao e https.
+        secure=request.url.scheme == "https",
+    )
+    return Usuario(**usuario)
+
+
+@app.get("/api/auth/me", response_model=Usuario)
+def eu(usuario: Usuario = Depends(usuario_atual)) -> Usuario:
+    """A UI usa esta rota para decidir o que desenhar (papel do usuario logado)."""
+    return usuario
+
+
+@app.get("/api/admin/usuarios", response_model=list[Usuario])
+def listar_usuarios(usuario: Usuario = Depends(exigir_admin)) -> list[Usuario]:
+    """Lista de usuarios, restrita a admin (L-07/T-06-10)."""
+    return [Usuario(**u) for u in auth.listar_usuarios()]
 
 
 def _extrair_com_fallback(

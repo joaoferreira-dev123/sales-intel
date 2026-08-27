@@ -73,3 +73,25 @@ class BriefingRequest(BaseModel):
         default=False, description="Ignora o cache e raspa de novo"
     )
 
+
+class LoginRequest(BaseModel):
+    """O que o cliente envia para logar. Exatamente dois campos: `papel`
+    nunca vem da requisicao (D-17), sempre e lido da linha de usuarios."""
+
+    username: str = Field(min_length=1, max_length=64)
+    senha: str = Field(
+        min_length=1,
+        max_length=128,
+        description="Teto de 128: limite de custo contra forcar o KDF sobre um corpo gigante",
+    )
+
+
+class Usuario(BaseModel):
+    """Formato do usuario devolvido pela API. Nunca carrega senha_hash nem
+    nenhum campo derivado da senha."""
+
+    id: str
+    username: str
+    papel: Literal["vendedor", "admin"]
+    ativo: bool
+

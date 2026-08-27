@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 import pytest
 from fastapi.testclient import TestClient
 
-from app import db, extractor, main
+from app import auth, db, extractor, main
 from app.extractor import (
     DELIM_FIM,
     DELIM_INICIO,
@@ -386,4 +386,85 @@ def test_falha_dupla_devolve_briefing_de_falha_sem_vazar_excecao(monkeypatch):
     assert item["briefing"]["resumo"] == main.MSG_FALHA_GENERICA
     assert item["degradado"] is None
     assert chamadas_salvar == []
+
+# Fase 6 (D-15/D-16/D-17): mesmo espirito do literal "chave-de-teste-sem-valor"
+# ja usado acima (T-05-10) — nunca uma senha literal de producao.
+SENHA_DE_TESTE = "senha-de-teste-sem-valor"
+
+
+def _cliente_autenticado(monkeypatch, tmp_path, papel="vendedor", username="vend"):
+    """Isola em tmp_path (T-05-64), cria um usuario e devolve um TestClient
+    ja logado (cookie de sessao no jar)."""
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "teste.db")
+    db.criar_tabelas()
+    auth.criar_usuario(username, SENHA_DE_TESTE, papel)
+
+    # Todos os testes saem do mesmo IP "testclient" e o estado dos
+    # limitadores e global de proposito — sem a limpeza um teste envenena o
+    # seguinte.
+    main._requisicoes_por_ip.clear()
+
+    # Sem "with": nao dispara o lifespan (mesma disciplina ja adotada nos
+    # testes existentes acima).
+    client = TestClient(main.app)
+    resp = client.post(
+        "/api/auth/login",
+        json={"username": username, "senha": SENHA_DE_TESTE},
+    )
+    assert resp.status_code == 200
+    return client
+
+# D-17/L-07: criterio de pronto da SPEC S15 — vendedor nao acessa rota de
+# admin nem chamando a API direto.
+def test_vendedor_autenticado_recebe_403_em_rota_de_admin(monkeypatch, tmp_path):
+    client = _cliente_autenticado(monkeypatch, tmp_path, papel="vendedor")
+    resp = client.get("/api/admin/usuarios")
+    assert resp.status_code == 403
+
+# D-17: 401 (nao autenticado) e 403 (sem permissao) sao dois estados
+# distintos, ambos vindos do servidor.
+def test_rota_de_admin_sem_cookie_devolve_401(monkeypatch, tmp_path):
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "teste.db")
+    db.criar_tabelas()
+    main._requisicoes_por_ip.clear()
+    client = TestClient(main.app)
+    resp = client.get("/api/admin/usuarios")
+    assert resp.status_code == 401
+
+# D-15: usuario inexistente e senha errada produzem exatamente a mesma
+# resposta, para nao permitir enumeracao de username (T-06-01).
+def test_login_invalido_nao_distingue_usuario_inexistente_de_senha_errada(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "teste.db")
+    db.criar_tabelas()
+    auth.criar_usuario("existe", SENHA_DE_TESTE, "vendedor")
+    main._requisicoes_por_ip.clear()
+    client = TestClient(main.app)
+
+    resp_inexistente = client.post(
+        "/api/auth/login",
+        json={"username": "nao-existe", "senha": SENHA_DE_TESTE},
+    )
+    resp_senha_errada = client.post(
+        "/api/auth/login",
+        json={"username": "existe", "senha": "senha-errada"},
+    )
+
+    assert resp_inexistente.status_code == 401
+    assert resp_senha_errada.status_code == 401
+    assert resp_inexistente.json() == resp_senha_errada.json()
+    assert resp_inexistente.json()["detail"] == auth.MSG_LOGIN_INVALIDO
+
+# D-15: scrypt com salt por usuario — a mesma senha produz hashes
+# diferentes, e a verificacao aceita a senha certa e recusa a errada.
+def test_hash_de_senha_usa_scrypt_com_salt_por_usuario():
+    h1 = auth.gerar_hash_senha(SENHA_DE_TESTE)
+    h2 = auth.gerar_hash_senha(SENHA_DE_TESTE)
+
+    assert h1 != h2
+    assert h1.startswith("scrypt$")
+    assert h2.startswith("scrypt$")
+    assert auth.verificar_senha(SENHA_DE_TESTE, h1) is True
+    assert auth.verificar_senha("outra-senha", h1) is False
 

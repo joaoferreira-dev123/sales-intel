@@ -40,6 +40,31 @@ def criar_tabelas() -> None:
             )
             """
         )
+        # Fase 6 (D-15/D-16): usuarios e sessoes, criadas aqui pelo mesmo
+        # molde de briefings acima. "username" e UNIQUE por restricao de
+        # banco (SPEC S8), nao so checagem em Python.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS usuarios (
+                id         TEXT PRIMARY KEY,
+                username   TEXT NOT NULL UNIQUE,
+                senha_hash TEXT NOT NULL,
+                papel      TEXT NOT NULL,
+                ativo      INTEGER NOT NULL DEFAULT 1,
+                criado_em  TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS sessoes (
+                token_hash TEXT PRIMARY KEY,
+                usuario_id TEXT NOT NULL,
+                criada_em  TEXT NOT NULL,
+                expira_em  TEXT NOT NULL
+            )
+            """
+        )
 
 
 def buscar(url: str, llm_disponivel: bool = False) -> tuple[dict, str, datetime] | None:
