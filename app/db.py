@@ -11,6 +11,7 @@ sistema fala com as funcoes daqui, nao com o banco direto.
 
 import json
 import sqlite3
+from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -25,7 +26,10 @@ def conectar() -> sqlite3.Connection:
 
 
 def criar_tabelas() -> None:
-    with conectar() as conn:
+    # WR-02: `with conectar() as conn` sozinho so commita/reverte a
+    # transacao — nao fecha a conexao nem o file handle. `closing()` garante
+    # o fechamento explicito; o `conn` interno segue fazendo commit/rollback.
+    with closing(conectar()) as conn, conn:
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS briefings (
@@ -44,7 +48,7 @@ def buscar(url: str, llm_disponivel: bool = False) -> tuple[dict, str, datetime]
     esta disponivel, uma entrada gravada pelo heuristico e tratada como
     ausente (D-09).
     """
-    with conectar() as conn:
+    with closing(conectar()) as conn, conn:
         row = conn.execute(
             "SELECT briefing, extrator, coletado_em FROM briefings WHERE url = ?",
             (url,),
@@ -65,7 +69,7 @@ def buscar(url: str, llm_disponivel: bool = False) -> tuple[dict, str, datetime]
 
 def salvar(url: str, briefing: dict, extrator: str) -> datetime:
     agora = datetime.now(timezone.utc)
-    with conectar() as conn:
+    with closing(conectar()) as conn, conn:
         conn.execute(
             """
             INSERT INTO briefings (url, briefing, extrator, coletado_em)
@@ -82,7 +86,7 @@ def salvar(url: str, briefing: dict, extrator: str) -> datetime:
 
 def listar(limite: int = 50) -> list[dict]:
     """Historico para a tela de admin."""
-    with conectar() as conn:
+    with closing(conectar()) as conn, conn:
         rows = conn.execute(
             "SELECT url, extrator, coletado_em FROM briefings "
             "ORDER BY coletado_em DESC LIMIT ?",
