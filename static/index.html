@@ -68,6 +68,15 @@
     <span id="status" class="meta"></span>
   </div>
   <div id="resultados"></div>
+
+  <div class="card" id="painel-historico">
+    <h2>Histórico</h2>
+    <div class="row">
+      <button id="btn-historico">Atualizar histórico</button>
+      <span id="historico-status" class="meta"></span>
+    </div>
+    <div id="historico-lista"></div>
+  </div>
 </main>
 
 <script>
@@ -90,7 +99,47 @@ const btnEntrar = document.getElementById('btn-entrar');
 const btnSair = document.getElementById('btn-sair');
 const loginStatus = document.getElementById('login-status');
 
+const btnHistorico = document.getElementById('btn-historico');
+const historicoStatus = document.getElementById('historico-status');
+const historicoLista = document.getElementById('historico-lista');
+
 let usuarioLogado = null;
+
+async function carregarHistorico() {
+  btnHistorico.disabled = true;
+  historicoStatus.textContent = 'Carregando...';
+  try {
+    const resp = await fetch('/api/historico?limite=50');
+    if (resp.status === 401) {
+      await carregarSessao();
+      return;
+    }
+    if (!resp.ok) throw new Error('Erro ' + resp.status);
+    const linhas = await resp.json();
+    historicoStatus.textContent = linhas.length + ' registro(s)';
+    historicoLista.innerHTML = linhas.length
+      ? linhas.map(renderHistorico).join('')
+      : '<p class="vazio">Nenhum registro ainda.</p>';
+  } catch (e) {
+    historicoStatus.textContent = 'Falhou: ' + escapar(e.message);
+  } finally {
+    btnHistorico.disabled = false;
+  }
+}
+
+function renderHistorico(linha) {
+  const colunaDono = usuarioLogado && usuarioLogado.papel === 'admin'
+    ? `<span class="tag">dono: ${escapar(linha.dono ?? 'origem desconhecida')}</span>`
+    : '';
+  return `<div class="card">
+    <div class="meta">${escapar(linha.url)}</div>
+    <span class="tag">extrator: ${escapar(linha.extrator)}</span>
+    <span class="tag">coletado em: ${escapar(linha.coletado_em)}</span>
+    ${colunaDono}
+  </div>`;
+}
+
+btnHistorico.onclick = carregarHistorico;
 
 async function carregarSessao() {
   try {
@@ -101,6 +150,7 @@ async function carregarSessao() {
       secaoApp.hidden = false;
       cabecalhoUsuario.hidden = false;
       nomeUsuarioLogado.textContent = escapar(usuarioLogado.username);
+      await carregarHistorico();
     } else if (resp.status === 401) {
       usuarioLogado = null;
       secaoApp.hidden = true;
@@ -172,6 +222,7 @@ btn.onclick = async () => {
     const dados = await resp.json();
     status.textContent = dados.length + ' resultado(s)';
     saida.innerHTML = dados.map(render).join('');
+    await carregarHistorico();
   } catch (e) {
     status.textContent = 'Falhou: ' + e.message;
   } finally {

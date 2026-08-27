@@ -1032,3 +1032,55 @@ def test_front_consome_as_rotas_de_sessao():
     for rota in ["/api/auth/login", "/api/auth/me", "/api/auth/logout"]:
         assert rota in conteudo, rota
 
+
+# D-18: o painel de historico consome GET /api/historico; o recorte por
+# dono continua sendo decisao do servidor, nunca da tela.
+def test_front_consome_a_rota_de_historico():
+    conteudo = Path("static/index.html").read_text(encoding="utf-8")
+    assert "/api/historico" in conteudo
+    assert "carregarHistorico" in conteudo
+    assert 'id="painel-historico"' in conteudo
+
+
+# D-18, reafirmado pela borda da API: o vendedor logado recebe apenas o
+# proprio historico, nunca a linha de outro vendedor.
+def test_vendedor_logado_recebe_apenas_o_proprio_historico_pela_api(monkeypatch, tmp_path):
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "teste.db")
+    db.criar_tabelas()
+    auth.criar_usuario("vendedor_um", SENHA_DE_TESTE, "vendedor")
+    auth.criar_usuario("vendedor_dois", SENHA_DE_TESTE, "vendedor")
+    usuario_um = auth.autenticar("vendedor_um", SENHA_DE_TESTE)
+    usuario_dois = auth.autenticar("vendedor_dois", SENHA_DE_TESTE)
+    db.salvar(
+        "https://um.com.br", {"empresa": "Um", "resumo": "r"}, "heuristico", dono=usuario_um["id"]
+    )
+    db.salvar(
+        "https://dois.com.br",
+        {"empresa": "Dois", "resumo": "r"},
+        "heuristico",
+        dono=usuario_dois["id"],
+    )
+
+    main._requisicoes_por_ip.clear()
+    main._tentativas_login_por_ip.clear()
+    main._falhas_login_por_usuario.clear()
+
+    client_um = TestClient(main.app)
+    resp_login_um = client_um.post(
+        "/api/auth/login", json={"username": "vendedor_um", "senha": SENHA_DE_TESTE}
+    )
+    assert resp_login_um.status_code == 200
+    resp_um = client_um.get("/api/historico")
+    assert resp_um.status_code == 200
+    assert [linha["url"] for linha in resp_um.json()] == ["https://um.com.br"]
+
+    main._tentativas_login_por_ip.clear()
+    client_dois = TestClient(main.app)
+    resp_login_dois = client_dois.post(
+        "/api/auth/login", json={"username": "vendedor_dois", "senha": SENHA_DE_TESTE}
+    )
+    assert resp_login_dois.status_code == 200
+    resp_dois = client_dois.get("/api/historico")
+    assert resp_dois.status_code == 200
+    assert [linha["url"] for linha in resp_dois.json()] == ["https://dois.com.br"]
+
