@@ -87,3 +87,49 @@ def test_llm_sem_chave_levanta_erro_claro(monkeypatch):
     assert "chave" in str(exc.value).lower()
     assert "None" not in str(exc.value) and "NoneType" not in str(exc.value)
 
+def test_falha_ao_salvar_no_cache_nao_derruba_o_lote(monkeypatch):
+    # L-02: falha de gravacao no cache e falha de otimizacao, nao motivo para
+    # descartar um briefing ja gerado com sucesso, nem para derrubar outras
+    # URLs do mesmo lote que ja tinham sido processadas.
+    monkeypatch.delenv("LLM_API_KEY", raising=False)
+
+    def salvar_com_falha_seletiva(url, briefing, extrator):
+        if "quebra" in url:
+            raise RuntimeError("disco cheio")
+        return datetime.now(timezone.utc)
+
+    monkeypatch.setattr(main, "buscar_html", lambda url: HTML)
+    monkeypatch.setattr(db, "buscar", lambda *args, **kwargs: None)
+    monkeypatch.setattr(db, "salvar", salvar_com_falha_seletiva)
+
+    # Sem "with": nao dispara o lifespan, entao nao chama db.criar_tabelas()
+    # nem cria o arquivo briefings.db.
+    client = TestClient(main.app)
+    resp = client.post(
+        "/api/briefings",
+        json={
+            "urls": [
+                "https://acme.com.br/quebra",
+                "https://acme.com.br/boa",
+            ],
+            "forcar_atualizacao": True,
+        },
+    )
+
+    assert resp.status_code == 200
+    dados = resp.json()
+    assert len(dados) == 2
+
+    # A segunda URL, que gravou com sucesso, segue intacta.
+    item_boa = dados[1]
+    assert item_boa["extrator"] == "heuristico"
+    assert item_boa["origem"] == "novo"
+    assert item_boa["briefing"]["empresa"] == "Acme Tecnologia"
+
+    # A primeira URL preserva o briefing ja gerado, so sinalizando a
+    # degradacao no campo proprio, sem vazar o texto da excecao original.
+    item_quebrada = dados[0]
+    assert item_quebrada["extrator"] == "heuristico"
+    assert item_quebrada["briefing"]["empresa"] == "Acme Tecnologia"
+    assert item_quebrada["degradado"] == main.AVISO_CACHE_INDISPONIVEL
+
