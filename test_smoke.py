@@ -403,6 +403,8 @@ def _cliente_autenticado(monkeypatch, tmp_path, papel="vendedor", username="vend
     # limitadores e global de proposito — sem a limpeza um teste envenena o
     # seguinte.
     main._requisicoes_por_ip.clear()
+    main._tentativas_login_por_ip.clear()
+    main._falhas_login_por_usuario.clear()
 
     # Sem "with": nao dispara o lifespan (mesma disciplina ja adotada nos
     # testes existentes acima).
@@ -467,4 +469,88 @@ def test_hash_de_senha_usa_scrypt_com_salt_por_usuario():
     assert h2.startswith("scrypt$")
     assert auth.verificar_senha(SENHA_DE_TESTE, h1) is True
     assert auth.verificar_senha("outra-senha", h1) is False
+
+# D-16/T-06-15: a sessao morre no servidor, nao so no navegador.
+def test_logout_invalida_a_sessao(monkeypatch, tmp_path):
+    client = _cliente_autenticado(monkeypatch, tmp_path, papel="vendedor")
+
+    resp_logout = client.post("/api/auth/logout")
+    assert resp_logout.status_code == 200
+
+    resp_me = client.get("/api/auth/me")
+    assert resp_me.status_code == 401
+
+def test_logout_sem_cookie_devolve_401(monkeypatch, tmp_path):
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "teste.db")
+    db.criar_tabelas()
+    main._requisicoes_por_ip.clear()
+    main._tentativas_login_por_ip.clear()
+    main._falhas_login_por_usuario.clear()
+    client = TestClient(main.app)
+    resp = client.post("/api/auth/logout")
+    assert resp.status_code == 401
+
+# T-06-13: janela deslizante de 5 minutos, limite de 10 tentativas por IP.
+# Cada tentativa usa um username diferente para isolar o limite por IP do
+# limite por username (que dispararia antes, a 5 falhas do mesmo username).
+def test_login_excede_limite_por_ip_devolve_429(monkeypatch, tmp_path):
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "teste.db")
+    db.criar_tabelas()
+    main._requisicoes_por_ip.clear()
+    main._tentativas_login_por_ip.clear()
+    main._falhas_login_por_usuario.clear()
+    client = TestClient(main.app)
+
+    for i in range(main._LOGIN_MAX_POR_IP):
+        client.post(
+            "/api/auth/login",
+            json={"username": f"nao-existe-{i}", "senha": "senha-errada"},
+        )
+
+    resp = client.post(
+        "/api/auth/login",
+        json={"username": "nao-existe-mais-uma", "senha": "senha-errada"},
+    )
+    assert resp.status_code == 429
+
+# T-06-13/T-06-14: contador por username independente do contador por IP, e
+# um login bem-sucedido zera a lista de falhas (sem bloqueio persistente).
+def test_falhas_repetidas_no_mesmo_usuario_devolvem_429_e_sucesso_limpa_o_contador(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "teste.db")
+    db.criar_tabelas()
+    auth.criar_usuario("vitima", SENHA_DE_TESTE, "vendedor")
+    main._requisicoes_por_ip.clear()
+    main._tentativas_login_por_ip.clear()
+    main._falhas_login_por_usuario.clear()
+    client = TestClient(main.app)
+
+    for _ in range(main._LOGIN_MAX_FALHAS_POR_USUARIO):
+        resp = client.post(
+            "/api/auth/login",
+            json={"username": "vitima", "senha": "senha-errada"},
+        )
+        assert resp.status_code == 401
+
+    resp_bloqueado = client.post(
+        "/api/auth/login",
+        json={"username": "vitima", "senha": "senha-errada"},
+    )
+    assert resp_bloqueado.status_code == 429
+
+    # Limpa o estado (nao o teste que estava provando) e faz um login valido.
+    main._falhas_login_por_usuario.clear()
+    resp_login_valido = client.post(
+        "/api/auth/login",
+        json={"username": "vitima", "senha": SENHA_DE_TESTE},
+    )
+    assert resp_login_valido.status_code == 200
+
+    # O sucesso zerou o contador: a proxima falha volta a ser 401, nao 429.
+    resp_falha_pos_sucesso = client.post(
+        "/api/auth/login",
+        json={"username": "vitima", "senha": "senha-errada"},
+    )
+    assert resp_falha_pos_sucesso.status_code == 401
 

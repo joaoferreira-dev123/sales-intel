@@ -72,6 +72,73 @@ def _checar_rate_limit(request: Request) -> None:
         historico.append(agora)
 
 
+# Limite de forca bruta no login (T-06-13/T-06-14). Estado proprio, separado
+# de `_requisicoes_por_ip` acima, para nao competir com o limitador da rota
+# de briefings.
+#
+# (a) Duas contagens, nao uma: so por IP deixa passar pulverizacao
+#     distribuida contra uma unica conta (varias origens tentando o mesmo
+#     username); so por username deixa um atacante trancar a conta de um
+#     vendedor legitimo so martelando login com senha errada.
+# (b) Janela deslizante, nao bloqueio: nao existe estado de "conta
+#     bloqueada" que um terceiro possa induzir contra outra pessoa — um
+#     sucesso limpa o contador do username, e a janela expira sozinha.
+# (c) Estado em memoria de um processo unico, com a mesma limitacao ja
+#     declarada em WR-04 — nao sobrevive a reinicio nem a multiplos workers.
+_LOGIN_JANELA = timedelta(minutes=5)
+_LOGIN_MAX_POR_IP = 10  # toda tentativa daquele endereco conta
+_LOGIN_MAX_FALHAS_POR_USUARIO = 5  # so falha conta; sucesso limpa a lista
+_login_lock = Lock()
+_tentativas_login_por_ip: dict[str, list[datetime]] = {}
+_falhas_login_por_usuario: dict[str, list[datetime]] = {}
+
+# Mensagem de 429 e literal autorado e nao revela se o username existe.
+MSG_LOGIN_MUITAS_TENTATIVAS = "Muitas tentativas de login. Tente novamente em instantes."
+
+
+def _checar_limite_login_por_ip(request: Request) -> None:
+    """Dependency do FastAPI: levanta 429 se o IP do chamador excedeu o
+    limite de tentativas de login na janela atual."""
+    ip = request.client.host if request.client else "desconhecido"
+    agora = datetime.now(timezone.utc)
+    limite_inferior = agora - _LOGIN_JANELA
+    with _login_lock:
+        historico = _tentativas_login_por_ip.setdefault(ip, [])
+        historico[:] = [t for t in historico if t >= limite_inferior]
+        if len(historico) >= _LOGIN_MAX_POR_IP:
+            raise HTTPException(status_code=429, detail=MSG_LOGIN_MUITAS_TENTATIVAS)
+        historico.append(agora)
+
+
+def _checar_limite_login_por_usuario(username: str) -> None:
+    """Levanta 429 se o username excedeu o limite de falhas na janela
+    atual. Chamada dentro do corpo da rota de login, antes de
+    `auth.autenticar`, porque o username so existe depois do corpo da
+    requisicao ser desserializado."""
+    agora = datetime.now(timezone.utc)
+    limite_inferior = agora - _LOGIN_JANELA
+    with _login_lock:
+        falhas = _falhas_login_por_usuario.setdefault(username, [])
+        falhas[:] = [t for t in falhas if t >= limite_inferior]
+        if len(falhas) >= _LOGIN_MAX_FALHAS_POR_USUARIO:
+            raise HTTPException(status_code=429, detail=MSG_LOGIN_MUITAS_TENTATIVAS)
+
+
+def _registrar_falha_de_login(username: str) -> None:
+    """Registra uma falha de autenticacao para o username. Chamada quando
+    `auth.autenticar` devolve None."""
+    agora = datetime.now(timezone.utc)
+    with _login_lock:
+        _falhas_login_por_usuario.setdefault(username, []).append(agora)
+
+
+def _limpar_falhas_de_login(username: str) -> None:
+    """Zera o contador de falhas do username. Chamada no caminho de
+    sucesso: um login valido nao deixa uma conta em estado bloqueado."""
+    with _login_lock:
+        _falhas_login_por_usuario.pop(username, None)
+
+
 def usuario_atual(request: Request) -> Usuario:
     """Dependency do FastAPI: le o cookie de sessao e devolve o usuario
     autenticado. Sem cookie ou com sessao invalida levanta 401. Ligada as
@@ -107,13 +174,24 @@ def health() -> dict:
     return {"status": "ok", "llm_disponivel": bool(config.llm_api_key())}
 
 
-@app.post("/api/auth/login", response_model=Usuario)
+@app.post(
+    "/api/auth/login",
+    response_model=Usuario,
+    dependencies=[Depends(_checar_limite_login_por_ip)],
+)
 def login(dados: LoginRequest, request: Request, resposta: Response) -> Usuario:
     """Autentica por username e senha. Nenhum caminho emite sessao antes da
     autenticacao — e o que fecha fixacao de sessao (T-06-07)."""
+    _checar_limite_login_por_usuario(dados.username)
+
     usuario = auth.autenticar(dados.username, dados.senha)
     if usuario is None:
+        _registrar_falha_de_login(dados.username)
         raise HTTPException(status_code=401, detail=auth.MSG_LOGIN_INVALIDO)
+
+    # Login bem-sucedido zera o contador de falhas do username: nao existe
+    # conta em estado bloqueado (T-06-14).
+    _limpar_falhas_de_login(dados.username)
 
     # Login bem-sucedido sempre emite token novo e sobrescreve o cookie.
     token = auth.criar_sessao(usuario["id"])
@@ -142,6 +220,20 @@ def eu(usuario: Usuario = Depends(usuario_atual)) -> Usuario:
 def listar_usuarios(usuario: Usuario = Depends(exigir_admin)) -> list[Usuario]:
     """Lista de usuarios, restrita a admin (L-07/T-06-10)."""
     return [Usuario(**u) for u in auth.listar_usuarios()]
+
+
+@app.post("/api/auth/logout")
+def logout(
+    request: Request, resposta: Response, usuario: Usuario = Depends(usuario_atual)
+) -> dict:
+    """Encerra a sessao no servidor. Exigir `usuario_atual` e deliberado:
+    sem sessao valida nao ha o que encerrar, e mantem a regra de que toda
+    rota de /api/ tem guarda declarada."""
+    token = request.cookies.get(auth.NOME_COOKIE_SESSAO)
+    if token:
+        auth.encerrar_sessao(token)
+    resposta.delete_cookie(key=auth.NOME_COOKIE_SESSAO, path="/")
+    return {"status": "ok"}
 
 
 def _extrair_com_fallback(
