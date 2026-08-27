@@ -1,6 +1,8 @@
 ﻿"""Testes que rodam sem internet."""
 import json
+import re
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -994,4 +996,39 @@ def test_nenhuma_rota_expoe_configuracao_do_processo():
     assert "import os" not in corpo
     assert "LLM_BASE_URL" not in corpo
     assert "LLM_MODELO" not in corpo
+
+
+# Fase 6, plano 05 (L-07/L-10): a tela de login e o estado autenticado
+# vivem dentro da UI ja existente, em JavaScript puro.
+def test_pagina_inicial_traz_tela_de_login():
+    client = TestClient(main.app)
+    resp = client.get("/")
+    assert resp.status_code == 200
+    corpo = resp.text
+    assert 'id="login"' in corpo
+    assert 'type="password"' in corpo
+
+
+# T-06-46: escapar() passa a cobrir aspa simples, contexto de atributo que
+# a area de administracao (Task 3) passa a usar.
+def test_escapar_do_front_cobre_aspas_simples():
+    conteudo = Path("static/index.html").read_text(encoding="utf-8")
+    assert "&#39;" in conteudo
+    m = re.search(r'replace\(/\[([^\]]+)\]/g', conteudo)
+    assert m is not None, "regex de escapar() nao encontrada"
+    assert len(m.group(1)) == 5
+
+
+# T-06-52/D-16: a sessao viaja por cookie HttpOnly — o script nunca pode
+# desligar o envio de credencial na chamada fetch.
+def test_front_nao_desliga_o_envio_de_cookie():
+    conteudo = Path("static/index.html").read_text(encoding="utf-8")
+    assert "'omit'" not in conteudo
+    assert '"omit"' not in conteudo
+
+
+def test_front_consome_as_rotas_de_sessao():
+    conteudo = Path("static/index.html").read_text(encoding="utf-8")
+    for rota in ["/api/auth/login", "/api/auth/me", "/api/auth/logout"]:
+        assert rota in conteudo, rota
 

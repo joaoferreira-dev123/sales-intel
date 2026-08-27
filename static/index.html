@@ -32,15 +32,35 @@
                   text-transform:uppercase; letter-spacing:.5px; margin-bottom:4px; }
   ul { margin:4px 0; padding-left:18px; }
   .vazio { color:var(--muted); font-style:italic; }
+  input[type="text"], input[type="password"], select { width:100%; padding:10px; font:inherit;
+             border:1px solid var(--line); border-radius:8px; margin-top:4px; }
 </style>
 </head>
 <body>
 <header>
   <h1>Sales Intel</h1>
   <p>Cole os links do cliente e receba um briefing pronto para a reunião.</p>
+  <div id="cabecalho-usuario" class="row" hidden>
+    <span id="nome-usuario-logado" class="meta"></span>
+    <button id="btn-sair">Sair</button>
+  </div>
 </header>
 
-<main>
+<main id="login" hidden>
+  <div class="card">
+    <h2>Entrar</h2>
+    <label for="login-usuario">Usuário</label>
+    <input type="text" id="login-usuario" placeholder="usuario" autocomplete="username">
+    <label for="login-senha">Senha</label>
+    <input type="password" id="login-senha" placeholder="senha" autocomplete="current-password">
+    <div class="row">
+      <button id="btn-entrar">Entrar</button>
+      <span id="login-status" class="meta"></span>
+    </div>
+  </div>
+</main>
+
+<main id="app" hidden>
   <textarea id="urls" placeholder="Um link por linha&#10;https://exemplo.com.br&#10;https://exemplo.com.br/sobre"></textarea>
   <div class="row">
     <button id="btn">Gerar briefing</button>
@@ -51,9 +71,87 @@
 </main>
 
 <script>
+// L-07: o que este script mostra ou esconde na tela e conforto de uso,
+// nunca controle de acesso. A autorizacao de verdade roda no servidor a
+// cada requisicao e continua recusando o vendedor mesmo com a tela
+// forcada a aparecer pelo inspetor.
+
 const btn = document.getElementById('btn');
 const status = document.getElementById('status');
 const saida = document.getElementById('resultados');
+
+const secaoLogin = document.getElementById('login');
+const secaoApp = document.getElementById('app');
+const cabecalhoUsuario = document.getElementById('cabecalho-usuario');
+const nomeUsuarioLogado = document.getElementById('nome-usuario-logado');
+const campoLoginUsuario = document.getElementById('login-usuario');
+const campoLoginSenha = document.getElementById('login-senha');
+const btnEntrar = document.getElementById('btn-entrar');
+const btnSair = document.getElementById('btn-sair');
+const loginStatus = document.getElementById('login-status');
+
+let usuarioLogado = null;
+
+async function carregarSessao() {
+  try {
+    const resp = await fetch('/api/auth/me');
+    if (resp.status === 200) {
+      usuarioLogado = await resp.json();
+      secaoLogin.hidden = true;
+      secaoApp.hidden = false;
+      cabecalhoUsuario.hidden = false;
+      nomeUsuarioLogado.textContent = escapar(usuarioLogado.username);
+    } else if (resp.status === 401) {
+      usuarioLogado = null;
+      secaoApp.hidden = true;
+      cabecalhoUsuario.hidden = true;
+      secaoLogin.hidden = false;
+    } else {
+      loginStatus.textContent = 'Nao foi possivel verificar a sessao (' + resp.status + ').';
+    }
+  } catch (e) {
+    loginStatus.textContent = 'Falha ao verificar sessao: ' + escapar(e.message);
+  }
+}
+
+btnEntrar.onclick = async () => {
+  const usuario = campoLoginUsuario.value.trim();
+  const senha = campoLoginSenha.value;
+  if (!usuario || !senha) { loginStatus.textContent = 'Preencha usuario e senha.'; return; }
+
+  btnEntrar.disabled = true;
+  loginStatus.textContent = 'Entrando...';
+
+  try {
+    const resp = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: usuario, senha })
+    });
+    if (!resp.ok) {
+      const corpo = await resp.json().catch(() => ({}));
+      loginStatus.textContent = escapar(corpo.detail || ('Erro ' + resp.status));
+      return;
+    }
+    campoLoginSenha.value = '';
+    loginStatus.textContent = '';
+    await carregarSessao();
+  } catch (e) {
+    loginStatus.textContent = 'Falhou: ' + escapar(e.message);
+  } finally {
+    btnEntrar.disabled = false;
+  }
+};
+
+btnSair.onclick = async () => {
+  btnSair.disabled = true;
+  try {
+    await fetch('/api/auth/logout', { method: 'POST' });
+  } finally {
+    btnSair.disabled = false;
+    await carregarSessao();
+  }
+};
 
 btn.onclick = async () => {
   const urls = document.getElementById('urls').value
@@ -107,10 +205,16 @@ function render(r) {
   </div>`;
 }
 
+// T-06-46: a aspa simples entra na classe de escape porque a area de
+// administracao passa a interpolar o id do usuario dentro de um atributo
+// de dado — sem esse caractere, o escape seria incompleto em contexto de
+// atributo.
 function escapar(s) {
-  return String(s ?? '').replace(/[&<>"]/g, c =>
-    ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;' }[c]));
+  return String(s ?? '').replace(/[&<>"']/g, c =>
+    ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
 }
+
+carregarSessao();
 </script>
 </body>
 </html>
