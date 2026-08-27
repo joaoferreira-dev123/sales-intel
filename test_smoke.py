@@ -231,6 +231,62 @@ def test_cache_llm_sobrevive_quando_llm_indisponivel(monkeypatch, tmp_path):
     assert linha is not None
     assert linha[1] == "llm"
 
+# D-18: `criar_tabelas()` roda no boot toda vez, entao precisa ser
+# repetivel sobre um banco que ja tem dado — sem levantar, e sem tocar em
+# nenhuma linha ja gravada.
+def test_criar_tabelas_e_repetivel_e_preserva_linhas_antigas(monkeypatch, tmp_path):
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "teste.db")
+    db.criar_tabelas()
+    db.salvar("https://acme.com.br", {"empresa": "Acme", "resumo": "texto"}, "heuristico")
+
+    db.criar_tabelas()  # segunda chamada: nao pode levantar nem duplicar coluna
+
+    linhas = db.listar(50, ver_tudo=True)
+    assert len(linhas) == 1
+    assert linhas[0]["url"] == "https://acme.com.br"
+    assert linhas[0]["dono"] is None  # linha anterior a Fase 6: dono nulo
+
+
+# D-18: o ramo fail-closed — nenhum dos dois parametros de recorte
+# informado devolve lista vazia, nunca a tabela inteira.
+def test_listar_sem_dono_e_sem_ver_tudo_devolve_lista_vazia(monkeypatch, tmp_path):
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "teste.db")
+    db.criar_tabelas()
+    db.salvar("https://acme.com.br", {"empresa": "Acme", "resumo": "texto"}, "heuristico", dono="u1")
+
+    assert db.listar(50) == []
+
+
+# D-18: um vendedor ve so as proprias linhas — nunca as de outro dono, nem
+# as de dono nulo.
+def test_listar_por_dono_nao_devolve_linha_de_outro_dono_nem_linha_sem_dono(monkeypatch, tmp_path):
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "teste.db")
+    db.criar_tabelas()
+    db.salvar("https://a.com.br", {"empresa": "A", "resumo": "texto"}, "heuristico", dono="u1")
+    db.salvar("https://b.com.br", {"empresa": "B", "resumo": "texto"}, "heuristico", dono="u2")
+    db.salvar("https://c.com.br", {"empresa": "C", "resumo": "texto"}, "heuristico")  # sem dono
+
+    linhas_u1 = db.listar(50, dono="u1")
+    assert len(linhas_u1) == 1
+    assert linhas_u1[0]["url"] == "https://a.com.br"
+
+
+# D-18: a clausula de conflito de `salvar` nao inclui o dono — recoletar a
+# mesma URL com outro dono atualiza o conteudo, mas nao transfere a linha.
+def test_recoleta_da_mesma_url_por_outro_dono_nao_troca_o_dono(monkeypatch, tmp_path):
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "teste.db")
+    db.criar_tabelas()
+    db.salvar("https://acme.com.br", {"empresa": "Acme", "resumo": "original"}, "heuristico", dono="a")
+    db.salvar("https://acme.com.br", {"empresa": "Acme", "resumo": "atualizado"}, "llm", dono="b")
+
+    assert len(db.listar(50, dono="a")) == 1
+    assert len(db.listar(50, dono="b")) == 0
+
+    linha = db.buscar("https://acme.com.br")
+    assert linha is not None
+    assert linha[0]["resumo"] == "atualizado"  # conteudo atualizou
+
+
 def test_montar_mensagens_remove_delimitador_forjado():
     # D-11, terceira camada: uma pagina que imprime o proprio delimitador nao
     # consegue "fechar" o bloco de dado nao confiavel.

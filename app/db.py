@@ -65,6 +65,19 @@ def criar_tabelas() -> None:
             )
             """
         )
+        # Fase 6 (D-18): `briefings` ganha um dono, mas so de forma aditiva.
+        # SQLite nao tem "ADD COLUMN IF NOT EXISTS" — a checagem via
+        # PRAGMA e o que torna esta chamada repetivel sem erro. Nenhuma
+        # linha ja gravada e tocada: a coluna nasce nula em toda linha
+        # anterior a Fase 6, e e a leitura (listar, abaixo) que decide o
+        # que aparece para quem, nunca uma migracao que reescreva ou
+        # apague dado velho (D-18, herdado de D-09/D-10 em buscar() e do
+        # aceite T-05-36).
+        colunas_briefings = {
+            row["name"] for row in conn.execute("PRAGMA table_info(briefings)").fetchall()
+        }
+        if "owner" not in colunas_briefings:
+            conn.execute("ALTER TABLE briefings ADD COLUMN owner TEXT")
 
 
 def buscar(url: str, llm_disponivel: bool = False) -> tuple[dict, str, datetime] | None:
@@ -107,30 +120,64 @@ def buscar(url: str, llm_disponivel: bool = False) -> tuple[dict, str, datetime]
     return briefing, row["extrator"], coletado_em
 
 
-def salvar(url: str, briefing: dict, extrator: str) -> datetime:
+def salvar(url: str, briefing: dict, extrator: str, dono: str | None = None) -> datetime:
     agora = datetime.now(timezone.utc)
     with closing(conectar()) as conn, conn:
         conn.execute(
             """
-            INSERT INTO briefings (url, briefing, extrator, coletado_em)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO briefings (url, briefing, extrator, coletado_em, owner)
+            VALUES (?, ?, ?, ?, ?)
             ON CONFLICT(url) DO UPDATE SET
                 briefing = excluded.briefing,
                 extrator = excluded.extrator,
                 coletado_em = excluded.coletado_em
             """,
-            (url, json.dumps(briefing, ensure_ascii=False), extrator, agora.isoformat()),
+            # D-18: a clausula de conflito acima nao inclui `owner` de
+            # proposito. `briefings` guarda uma linha por URL desde a Fase 3
+            # (cache compartilhado); uma recoleta por outro vendedor deve
+            # atualizar o conteudo, mas transferir a procedencia seria
+            # roubar a linha de quem coletou primeiro. O primeiro coletor
+            # fica com a linha.
+            (url, json.dumps(briefing, ensure_ascii=False), extrator, agora.isoformat(), dono),
         )
     return agora
 
 
-def listar(limite: int = 50) -> list[dict]:
-    """Historico para a tela de admin."""
+def listar(limite: int = 50, dono: str | None = None, ver_tudo: bool = False) -> list[dict]:
+    """Historico de briefings. D-18: a regra de visibilidade vive aqui, na
+    leitura — nunca na escrita, nunca numa migracao. `ver_tudo=True` e a
+    visao do admin (todas as linhas, inclusive as de dono nulo); `dono`
+    filtra pela coluna `owner`, e nunca casa com linha de dono nulo."""
     with closing(conectar()) as conn, conn:
-        rows = conn.execute(
-            "SELECT url, extrator, coletado_em FROM briefings "
-            "ORDER BY coletado_em DESC LIMIT ?",
-            (limite,),
-        ).fetchall()
+        if ver_tudo:
+            rows = conn.execute(
+                """
+                SELECT briefings.url AS url, briefings.extrator AS extrator,
+                       briefings.coletado_em AS coletado_em, usuarios.username AS dono
+                FROM briefings
+                LEFT JOIN usuarios ON usuarios.id = briefings.owner
+                ORDER BY briefings.coletado_em DESC
+                LIMIT ?
+                """,
+                (limite,),
+            ).fetchall()
+        elif dono:
+            rows = conn.execute(
+                """
+                SELECT briefings.url AS url, briefings.extrator AS extrator,
+                       briefings.coletado_em AS coletado_em, usuarios.username AS dono
+                FROM briefings
+                LEFT JOIN usuarios ON usuarios.id = briefings.owner
+                WHERE briefings.owner = ?
+                ORDER BY briefings.coletado_em DESC
+                LIMIT ?
+                """,
+                (dono, limite),
+            ).fetchall()
+        else:
+            # D-18: ramo deliberadamente fail-closed. Um chamador que
+            # esqueca de passar `dono` ou `ver_tudo` recebe lista vazia,
+            # nunca a tabela inteira.
+            return []
     return [dict(r) for r in rows]
 
