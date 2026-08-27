@@ -76,16 +76,22 @@ def _extrair_com_fallback(
             # LLMError, porque essas mensagens sao escritas e auditadas por
             # nos (plano 05). Qualquer outra excecao pode carregar texto
             # arbitrario de terceiro, entao o vendedor le apenas a frase
-            # generica nesse caso.
+            # generica nesse caso. Mesma regra vale no degrau abaixo (excecao
+            # do heuristico) e na guarda de gravacao no cache em
+            # gerar_briefings: so interpolamos mensagem autorada por nos.
             degradado = "IA indisponivel, briefing gerado por regras."
             if isinstance(erro_extrator, LLMError):
                 degradado = f"{degradado} {erro_extrator}"
             degradado = degradado[:200]
             return briefing, "heuristico", degradado
-        except Exception as erro_heuristico:
+        except Exception:
+            # D-06: mesma regra do degrau acima — so interpolamos str() de
+            # excecao autorada por nos. O heuristico pode, numa mudanca
+            # futura, levantar qualquer coisa; sem nome, nao ha nada seguro
+            # a fazer com ela num campo que o vendedor le.
             briefing = Briefing(
                 empresa=url,
-                resumo=f"Nao foi possivel gerar o briefing. {erro_heuristico}",
+                resumo=MSG_FALHA_GENERICA,
                 confianca="baixa",
             )
             return briefing, "falha", None
