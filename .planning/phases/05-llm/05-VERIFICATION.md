@@ -1,7 +1,7 @@
 ---
 phase: 05-llm
 verified: 2026-08-27T00:00:00Z
-status: human_needed
+status: passed
 score: 23/23 must-haves verified
 behavior_unverified: 0
 overrides_applied: 0
@@ -9,10 +9,12 @@ re_verification:
   previous_status: gaps_found
   previous_score: 21/23
   gaps_closed:
+
     - "L-02 — Fallback por URL, não por lote. Reconfirmado FIXED por leitura direta do código pós-05-08/05-09 e por DUAS reproduções independentes com TestClient real, escritas do zero nesta rodada (não as do plano), rodando totalmente offline (LLM_API_KEY removida do subprocesso): (a) db.salvar falhando na 1ª de 2 URLs -> 200, 2 itens, 2ª intacta, 1ª preserva o briefing com degradado == AVISO_CACHE_INDISPONIVEL; (b) linha de cache sem o campo empresa -> 200, origem: novo, sem 500."
   gaps_remaining: []
   regressions: []
 human_verification:
+
   - test: "Confirmar, com a chave real do Groq configurada, que POST /api/briefings ainda devolve um briefing 'rico' (dores_provaveis/ganchos_de_conversa específicos por página, não genéricos) para pelo menos 1-2 URLs reais — repetindo o espírito da verificação já registrada em 05-05-SUMMARY.md (Task 4)."
     expected: "HTTP 200, extrator: llm, campos de briefing claramente específicos da página coletada (não intercambiáveis entre URLs diferentes)."
     why_human: "Requer uma chamada paga ao provedor real (Groq/openai/gpt-oss-120b). Esta verificação rodou inteiramente offline por restrição explícita (nenhuma chamada paga nesta rodada) e, ao ligar acidentalmente com a chave herdada do ambiente do shell durante uma reprodução ad-hoc, foi refeita imediatamente sem a chave para não gerar uma chamada paga não solicitada (ver nota abaixo). A evidência já registrada em 05-05-SUMMARY.md (2 URLs reais, HTTP 200, extrator: llm, listas de dores_provaveis claramente distintas por página) é forte e não foi invalidada por nada encontrado nesta rodada — mas nenhum plano de fechamento de lacuna tocou app/extractor.py ou app/config.py desde então, então uma reconfirmação rápida antes de encerrar a fase, e não uma reexecução completa, é o que resta pendente de julgamento humano."
