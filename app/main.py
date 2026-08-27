@@ -165,6 +165,9 @@ def exigir_admin(usuario: Usuario = Depends(usuario_atual)) -> Usuario:
 @app.on_event("startup")
 def inicializar() -> None:
     db.criar_tabelas()
+    # D-19: seed do primeiro admin depois da tabela existir. Sem as duas
+    # variaveis de ambiente, devolve None e o processo sobe normalmente.
+    auth.semear_admin_inicial()
 
 
 @app.get("/health")

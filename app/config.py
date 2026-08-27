@@ -14,6 +14,9 @@ Por D-13, o endpoint e o modelo tambem viram variaveis de ambiente: a conta
 em uso e de um provedor compativel com a API da OpenAI, mas nao e a OpenAI, e
 os padroes abaixo apontam para esse provedor real justamente para que
 exportar so a chave ja funcione de ponta a ponta.
+
+Por D-19, `admin_username()` e `admin_senha()` semeiam o primeiro
+administrador na subida do processo e nunca tem valor padrao.
 """
 
 import os
@@ -23,6 +26,18 @@ def llm_api_key() -> str | None:
     """Funcao, nao constante: precisa ler o ambiente em tempo de chamada
     para que o monkeypatch dos testes 1 e 2 (plano 03) funcione."""
     return os.getenv("LLM_API_KEY") or None
+
+
+def admin_username() -> str | None:
+    """Funcao, nao constante (D-19): o seed de bootstrap e os testes do
+    plano 06-04 trocam o ambiente em tempo de execucao."""
+    return os.getenv("ADMIN_USERNAME") or None
+
+
+def admin_senha() -> str | None:
+    """Funcao, nao constante (D-19): o seed de bootstrap e os testes do
+    plano 06-04 trocam o ambiente em tempo de execucao."""
+    return os.getenv("ADMIN_SENHA") or None
 
 
 # Modelo padrao: unico modelo grande da conta em uso com saida estruturada

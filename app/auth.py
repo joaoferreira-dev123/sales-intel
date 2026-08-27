@@ -25,7 +25,7 @@ import uuid
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
 
-from . import db
+from . import config, db
 
 # Parametros de D-15. Nao reduzir para acelerar a suite de teste — o
 # criterio de aceite do plano trava estes quatro valores.
@@ -42,6 +42,13 @@ NOME_COOKIE_SESSAO = "sessao"
 # quanto para senha errada. A frase e deliberadamente identica nos dois
 # casos para nao revelar, pela resposta, quais usernames existem (T-06-01).
 MSG_LOGIN_INVALIDO = "Usuario ou senha invalidos."
+
+# D-19: mesmo minimo exigido pelo schema de criacao de usuario (Task 2) — a
+# politica de senha e uma so, nao duas.
+TAM_MINIMO_SENHA = 12
+MSG_SENHA_DE_ADMIN_CURTA = (
+    f"ADMIN_SENHA precisa ter pelo menos {TAM_MINIMO_SENHA} caracteres."
+)
 
 
 def gerar_hash_senha(senha: str) -> str:
@@ -238,3 +245,38 @@ def encerrar_sessao(token: str) -> None:
     token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
     with closing(db.conectar()) as conn, conn:
         conn.execute("DELETE FROM sessoes WHERE token_hash = ?", (token_hash,))
+
+
+def semear_admin_inicial() -> str | None:
+    """Semeia o primeiro administrador a partir do ambiente (D-19). Chamada
+    por `inicializar()` logo apos `db.criar_tabelas()` — e o unico gancho de
+    subida que o projeto tem.
+
+    Ordem deliberada:
+    1. Sem as duas variaveis (ou so uma delas), devolve None sem criar nada
+       e sem levantar. O processo precisa subir mesmo sem administrador,
+       senao ate a rota de saude deixaria de responder numa maquina limpa.
+    2. Senha curta levanta, nao semeia em silencio: quem definiu as duas
+       variaveis quer um administrador, e semear credencial fraca ou nao
+       semear em silencio sao os dois piores desfechos. Nenhum usuario final
+       consegue disparar este caminho, porque as duas variaveis so entram
+       pelo ambiente do processo, nunca por uma requisicao.
+    3. Username ja existente: devolve None sem tocar em nada. Trocar a senha
+       faria um restart desfazer uma rotacao; promover o usuario a admin
+       daria a quem controla o ambiente um caminho de escalada que nao passa
+       pela rota de admin (Task 2).
+    4. Caso contrario, cria o usuario com papel de administrador.
+    """
+    username = config.admin_username()
+    senha = config.admin_senha()
+    if not username or not senha:
+        return None
+
+    if len(senha) < TAM_MINIMO_SENHA:
+        raise RuntimeError(MSG_SENHA_DE_ADMIN_CURTA)
+
+    if buscar_usuario_por_username(username) is not None:
+        return None
+
+    usuario = criar_usuario(username, senha, "admin")
+    return usuario["id"]

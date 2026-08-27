@@ -686,3 +686,77 @@ def test_falhas_repetidas_no_mesmo_usuario_devolvem_429_e_sucesso_limpa_o_contad
     )
     assert resp_falha_pos_sucesso.status_code == 401
 
+
+# Fase 6 (D-19): bootstrap do primeiro admin a partir do ambiente.
+SENHA_DE_ADMIN_DE_TESTE = "senha-de-teste-de-admin"
+
+
+def test_semear_admin_inicial_cria_admin_a_partir_do_ambiente(monkeypatch, tmp_path):
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "teste.db")
+    db.criar_tabelas()
+    monkeypatch.setenv("ADMIN_USERNAME", "chefe")
+    monkeypatch.setenv("ADMIN_SENHA", SENHA_DE_ADMIN_DE_TESTE)
+
+    uid = auth.semear_admin_inicial()
+
+    assert uid is not None
+    usuario = auth.buscar_usuario_por_username("chefe")
+    assert usuario is not None
+    assert usuario["papel"] == "admin"
+    # A senha do ambiente autentica de verdade.
+    assert auth.autenticar("chefe", SENHA_DE_ADMIN_DE_TESTE) is not None
+
+
+def test_sem_variaveis_de_ambiente_nenhum_admin_e_criado(monkeypatch, tmp_path):
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "teste.db")
+    db.criar_tabelas()
+    monkeypatch.delenv("ADMIN_USERNAME", raising=False)
+    monkeypatch.delenv("ADMIN_SENHA", raising=False)
+
+    assert auth.semear_admin_inicial() is None
+    assert auth.listar_usuarios() == []
+
+    # Com apenas uma das duas definida, tambem nada e criado.
+    monkeypatch.setenv("ADMIN_USERNAME", "chefe")
+    assert auth.semear_admin_inicial() is None
+    assert auth.listar_usuarios() == []
+
+    monkeypatch.delenv("ADMIN_USERNAME", raising=False)
+    monkeypatch.setenv("ADMIN_SENHA", SENHA_DE_ADMIN_DE_TESTE)
+    assert auth.semear_admin_inicial() is None
+    assert auth.listar_usuarios() == []
+
+
+def test_semear_admin_inicial_nao_troca_senha_nem_papel_de_usuario_existente(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "teste.db")
+    db.criar_tabelas()
+    senha_original = "senha-original-do-vendedor"
+    auth.criar_usuario("chefe", senha_original, "vendedor")
+
+    monkeypatch.setenv("ADMIN_USERNAME", "chefe")
+    monkeypatch.setenv("ADMIN_SENHA", SENHA_DE_ADMIN_DE_TESTE)
+
+    assert auth.semear_admin_inicial() is None
+
+    usuario = auth.buscar_usuario_por_username("chefe")
+    assert usuario["papel"] == "vendedor"  # papel nao mudou
+    assert auth.autenticar("chefe", senha_original) is not None  # senha original ainda vale
+    assert auth.autenticar("chefe", SENHA_DE_ADMIN_DE_TESTE) is None  # senha do ambiente nao pegou
+
+
+def test_senha_de_admin_curta_levanta_com_mensagem_autorada(monkeypatch, tmp_path):
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "teste.db")
+    db.criar_tabelas()
+    senha_curta = "curta12345"  # menos de TAM_MINIMO_SENHA (12)
+    monkeypatch.setenv("ADMIN_USERNAME", "chefe")
+    monkeypatch.setenv("ADMIN_SENHA", senha_curta)
+
+    with pytest.raises(RuntimeError) as exc:
+        auth.semear_admin_inicial()
+
+    assert str(exc.value) == auth.MSG_SENHA_DE_ADMIN_CURTA
+    assert senha_curta not in str(exc.value)
+    assert auth.listar_usuarios() == []
+
