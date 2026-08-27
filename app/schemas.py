@@ -55,7 +55,9 @@ class BriefingResponse(BaseModel):
     origem: Literal["cache", "novo"] = Field(
         description="Se veio do banco (cache) ou foi raspado agora"
     )
-    extrator: str = Field(description="Qual implementacao gerou: heuristico ou llm")
+    extrator: Literal["llm", "heuristico", "falha"] = Field(
+        description="Qual implementacao gerou: heuristico, llm ou falha"
+    )
     degradado: str | None = Field(
         default=None,
         description="Motivo da degradacao para o heuristico, quando o extrator principal falhou",
