@@ -171,6 +171,11 @@ def autenticar(username: str, senha: str) -> dict | None:
         return None
 
     if not usuario["ativo"]:
+        # Mesma defesa de timing (T-06-02): sem isso, o caminho de conta
+        # desativada retorna quase instantaneamente enquanto os outros dois
+        # fazem trabalho de KDF, criando um canal lateral que distingue
+        # contas desativadas das demais so pela latencia (WR-01).
+        verificar_senha(senha, _HASH_DUMMY)
         return None
 
     if not verificar_senha(senha, usuario["senha_hash"]):
